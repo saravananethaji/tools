@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Conflicts · Maven Graph{% endblock %}
+{% block content %}
+<div class="card">
+  <h2 style="margin:.2rem 0 .4rem;">Version Conflicts</h2>
+  <p class="small">Artifacts with the same <code>groupId:artifactId</code> resolved to
+  different versions across the combined dependency graph.</p>
+  <button class="btn" onclick="reload()">↻ Reload</button>
+</div>
+
+{% if not conflicts %}
+  <div class="card"><span class="ok">✓ No version conflicts detected.</span></div>
+{% else %}
+  {% for c in conflicts %}
+  <div class="card">
+    <div class="conflict-row">
+      <div>
+        <span class="conflict-key">{{ c.artifact_key }}</span>
+        {% for v in c.versions %}<span class="ver-badge">{{ v }}</span>{% endfor %}
+      </div>
+      <span class="small">{{ c.occurrences | length }} occurrence{{ c.occurrences|length == 1 and '' or 's' }}</span>
+    </div>
+    <table style="width:100%; margin-top:.6rem; border-collapse:collapse;">
+      <thead><tr class="small">
+        <th style="text-align:left; padding:.3rem;">Module</th>
+        <th style="text-align:left; padding:.3rem;">Version</th>
+        <th style="text-align:left; padding:.3rem;">Scope</th>
+        <th style="text-align:left; padding:.3rem;">Coord</th>
+      </tr></thead>
+      <tbody>
+        {% for occ in c.occurrences %}
+        <tr style="border-top:1px solid var(--border);">
+          <td style="padding:.3rem;">{{ occ.module }}</td>
+          <td style="padding:.3rem;"><span class="ver-badge">{{ occ.version }}</span></td>
+          <td style="padding:.3rem;"><span class="scope-pill">{{ occ.scope }}</span></td>
+          <td style="padding:.3rem;" class="small">{{ occ.coord_id }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endfor %}
+{% endif %}
+
+<script>
+function reload(){ fetch('/api/reload',{method:'POST'}).then(()=>location.reload()); }
+</script>
+{% endblock %}

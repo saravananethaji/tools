@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Neo4j Export · Maven Graph{% endblock %}
+{% block content %}
+<div class="card">
+  <h2 style="margin:.2rem 0 .4rem;">Neo4j Cypher Export</h2>
+  <p class="small">The full graph as a <code>.cypher</code> script of <code>MERGE</code> statements.
+  Load via the Neo4j browser or <code>cypher-shell</code>.</p>
+  <div class="toolbar">
+    <a class="btn" href="/export/download" download>⬇ Download .cypher</a>
+    <button class="btn" onclick="copyCypher()">📋 Copy to clipboard</button>
+  </div>
+  <pre class="export" id="cypher">{{ cypher }}</pre>
+</div>
+<script>
+async function copyCypher(){
+  const t = document.getElementById('cypher').textContent;
+  await navigator.clipboard.writeText(t);
+}
+</script>
+{% endblock %}

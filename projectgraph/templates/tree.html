@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+{% block title %}Dependency Tree · Maven Graph{% endblock %}
+{% block content %}
+<div class="toolbar">
+  <input type="text" id="search" placeholder="Search dependencies (groupId / artifactId / version)…" value="{{ query }}" autocomplete="off">
+  <button class="btn" onclick="reload()">↻ Reload</button>
+  <span id="count" class="small"></span>
+</div>
+
+<div id="modules">
+  {% for m in modules %}
+  <div class="card module-card">
+    <div class="module-head" onclick="toggleModule(this)">
+      <span class="caret">▶</span>
+      <span class="module-title">{{ m.display }}
+        <span class="version-pill">{{ m.version }}</span>
+        {% if m.error %}<span class="scope-pill err">error</span>{% endif %}
+      </span>
+      <span class="small" style="margin-left:auto">{{ m.pom_path }}</span>
+    </div>
+    {% if m.error %}
+      <div class="err-box"><b>mvn error:</b> {{ m.error }}</div>
+    {% else %}
+      <div class="tree-body" style="display:none; padding-top:.5rem;">
+        <ul class="tree root" id="tree-{{ loop.index0 }}"></ul>
+      </div>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+
+<script>
+const MODULES = {{ modules | tojson }};
+
+function renderTree(container, node, query) {
+  const li = document.createElement('li');
+  li.className = 'node';
+  const row = document.createElement('div');
+  row.className = 'row';
+  const name = document.createElement('span');
+  name.className = 'name';
+  name.textContent = node.groupId + ':' + node.artifactId + ':' + node.version;
+  const ver = document.createElement('span');
+  ver.className = 'version-pill';
+  ver.textContent = node.version;
+  const scope = document.createElement('span');
+  scope.className = 'scope-pill';
+  scope.textContent = node.scope;
+  row.append(name, ver, scope);
+  li.appendChild(row);
+
+  // search match / dim
+  const q = (query || '').toLowerCase();
+  const hay = (node.groupId + ':' + node.artifactId + ':' + node.version).toLowerCase();
+  const isMatch = q && hay.includes(q);
+  if (q) {
+    if (isMatch) li.classList.add('match');
+    else li.classList.add('dim');
+  }
+  // expand path if a descendant matches
+  let anyDescMatch = false;
+  if (node.children && node.children.length) {
+    const ul = document.createElement('ul');
+    ul.className = 'tree';
+    for (const c of node.children) {
+      const childLi = renderTree(ul, c, query);
+      if (childLi.dataset.match === 'true') anyDescMatch = true;
+    }
+    li.appendChild(ul);
+  }
+  if (isMatch || anyDescMatch) li.dataset.match = 'true';
+  else li.dataset.match = isMatch ? 'true' : 'false';
+  container.appendChild(li);
+  return li;
+}
+
+function toggleModule(head) {
+  const body = head.nextElementSibling;
+  if (!body) return;
+  const open = body.style.display !== 'none';
+  body.style.display = open ? 'none' : '';
+  head.querySelector('.caret').textContent = open ? '▶' : '▼';
+  if (!open && body.id === '') {
+    // already rendered
+  }
+}
+
+function buildAll(query) {
+  const trees = document.querySelectorAll('.tree-body');
+  trees.forEach((body, i) => {
+    if (!body) return;
+    const ul = body.querySelector('ul');
+    ul.innerHTML = '';
+    const m = MODULES[i];
+    if (m.tree) {
+      renderTree(ul, m.tree, query);
+      // if searching, auto-open
+      if (query) body.style.display = '';
+    }
+  });
+  const cnt = document.getElementById('count');
+  if (query) {
+    const matches = document.querySelectorAll('.node.match').length;
+    cnt.textContent = matches + ' match' + (matches===1?'':'es');
+  } else cnt.textContent = '';
+}
+
+function reload() {
+  fetch('/api/reload', {method:'POST'}).then(r=>r.json()).then(()=>location.reload());
+}
+
+document.getElementById('search').addEventListener('input', (e) => {
+  buildAll(e.target.value);
+});
+
+// initial render: collapse all, show first module expanded
+window.addEventListener('DOMContentLoaded', () => {
+  buildAll('{{ query }}');
+  // expand the first non-error module
+  const first = document.querySelector('.module-head');
+  if (first) toggleModule(first);
+});
+</script>
+{% endblock %}

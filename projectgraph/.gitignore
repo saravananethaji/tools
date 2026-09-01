@@ -1,0 +1,16 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# App runtime cache (generated dependency trees)
+projectgraph/cache/
+
+# Generated export artifacts
+projectgraph/dependency-graph.cypher
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
