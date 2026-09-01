@@ -137,6 +137,9 @@ def parse_dot_to_tree(dot_text: str, root_coord_id: str) -> Optional[TreeNode]:
         )
         built[coord_id] = node  # guard against cycles
         for child_id in adj.get(coord_id, []):
+            # break cycles: skip back-edges to already-built ancestors
+            if child_id in built:
+                continue
             node.children.append(build(child_id))
         return node
 

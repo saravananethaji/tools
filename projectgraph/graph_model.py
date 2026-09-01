@@ -70,7 +70,13 @@ class TreeNode:
     def display(self) -> str:
         return f"{self.groupId}:{self.artifactId}:{self.version}"
 
-    def to_dict(self) -> dict:
+    def to_dict(self, _visited: Optional[set] = None) -> dict:
+        if _visited is None:
+            _visited = set()
+        # guard against cycles (shouldn't happen now, but belt-and-suspenders)
+        if self.coord_id in _visited:
+            return {"coord_id": self.coord_id, "cycle": True}
+        _visited = _visited | {self.coord_id}
         return {
             "coord_id": self.coord_id,
             "groupId": self.groupId,
@@ -79,7 +85,7 @@ class TreeNode:
             "scope": self.scope,
             "packaging": self.packaging,
             "display": self.display,
-            "children": [c.to_dict() for c in self.children],
+            "children": [c.to_dict(_visited) for c in self.children],
         }
 
 
@@ -143,7 +149,10 @@ class GraphModel:
         # artifact_key -> { version -> [ {module, scope} ] }
         seen: Dict[str, Dict[str, List[dict]]] = defaultdict(lambda: defaultdict(list))
 
-        def walk(node: TreeNode, module: Module):
+        def walk(node: TreeNode, module: Module, _visited: set):
+            if node.coord_id in _visited:
+                return
+            _visited = _visited | {node.coord_id}
             key = f"{node.groupId}:{node.artifactId}"
             seen[key][node.version].append({
                 "module": module.display,
@@ -151,11 +160,11 @@ class GraphModel:
                 "coord_id": node.coord_id,
             })
             for c in node.children:
-                walk(c, module)
+                walk(c, module, _visited)
 
         for m in self.modules:
             if m.tree:
-                walk(m.tree, m)
+                walk(m.tree, m, set())
 
         conflicts = []
         for key, versions in sorted(seen.items()):
@@ -174,7 +183,10 @@ class GraphModel:
     def all_artifacts(self) -> List[dict]:
         """Flat unique list of all artifact coords across all trees."""
         out: Dict[str, dict] = {}
-        def walk(node: TreeNode):
+        def walk(node: TreeNode, _visited: set):
+            if node.coord_id in _visited:
+                return
+            _visited = _visited | {node.coord_id}
             out[node.coord_id] = {
                 "id": node.coord_id,
                 "groupId": node.groupId,
@@ -184,26 +196,29 @@ class GraphModel:
                 "packaging": node.packaging,
             }
             for c in node.children:
-                walk(c)
+                walk(c, _visited)
         for m in self.modules:
             if m.tree:
-                walk(m.tree)
+                walk(m.tree, set())
         return list(out.values())
 
     def all_edges(self) -> List[dict]:
         """All dependency edges (from_id -> to_id, scope)."""
         edges: List[dict] = []
-        def walk(node: TreeNode):
+        def walk(node: TreeNode, _visited: set):
+            if node.coord_id in _visited:
+                return
+            _visited = _visited | {node.coord_id}
             for c in node.children:
                 edges.append({
                     "from_id": node.coord_id,
                     "to_id": c.coord_id,
                     "scope": c.scope,
                 })
-                walk(c)
+                walk(c, _visited)
         for m in self.modules:
             if m.tree:
-                walk(m.tree)
+                walk(m.tree, set())
         return edges
 
     # --- serialization (for on-disk cache) ---
