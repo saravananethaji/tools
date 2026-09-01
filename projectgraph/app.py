@@ -31,6 +31,10 @@ CACHE_DIR = os.path.join(BASE_DIR, "cache")
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
 
+# Ensure runtime dirs exist (git skips empty directories).
+os.makedirs(CACHE_DIR, exist_ok=True)
+os.makedirs(STATIC_DIR, exist_ok=True)
+
 app = FastAPI(title="Maven Dependency Graph")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
