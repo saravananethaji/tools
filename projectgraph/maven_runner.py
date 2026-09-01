@@ -162,6 +162,7 @@ def run_mvn_dependency_tree(pom_dir: str) -> Tuple[bool, str, str]:
     try:
         proc = subprocess.run(
             cmd, cwd=pom_dir, capture_output=True, text=True, timeout=300,
+            shell=(os.name == "nt"),   # Windows needs shell to resolve mvn.cmd
         )
     except FileNotFoundError:
         return False, "", "`mvn` executable not found on PATH"
