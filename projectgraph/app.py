@@ -12,6 +12,7 @@ Routes:
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 from pathlib import Path
@@ -25,6 +26,15 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from maven_runner import build_model
 from neo4j_export import export_cypher
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%H:%M:%S",
+    stream=sys.stdout,
+)
+logger = logging.getLogger("projectgraph")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CACHE_DIR = os.path.join(BASE_DIR, "cache")
@@ -117,17 +127,25 @@ async def export_download():
 @app.post("/api/reload")
 async def api_reload():
     root = _state["root"] or _default_root()
+    logger.info(f"Reload requested for: {root}")
     _state["model"] = build_model(root, CACHE_DIR, force_reload=True)
-    return JSONResponse({"ok": True, "modules": len(_state["model"].modules)})
+    count = len(_state["model"].modules)
+    logger.info(f"Reload complete: {count} module(s)")
+    return JSONResponse({"ok": True, "modules": count})
 
 
 @app.post("/api/load")
 async def api_load(root: str = Form(...)):
+    logger.info(f"Load requested for: {root}")
     if not os.path.isdir(root):
+        logger.error(f"Not a directory: {root}")
         return JSONResponse({"ok": False, "error": "not a directory"}, status_code=400)
     _state["root"] = os.path.abspath(root)
+    logger.info(f"Scanning directory: {_state['root']}")
     _state["model"] = build_model(_state["root"], CACHE_DIR)
-    return JSONResponse({"ok": True, "modules": len(_state["model"].modules)})
+    count = len(_state["model"].modules)
+    logger.info(f"Load complete: {count} module(s)")
+    return JSONResponse({"ok": True, "modules": count})
 
 
 if __name__ == "__main__":

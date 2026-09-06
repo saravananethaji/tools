@@ -8,9 +8,11 @@ re-run and the cache refreshed.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import subprocess
+import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -21,6 +23,15 @@ from graph_model import (
     TreeNode,
     parse_maven_coordinate,
 )
+
+# Configure logging to console
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%H:%M:%S",
+    stream=sys.stdout,
+)
+logger = logging.getLogger("projectgraph")
 
 
 NS = {"m": "http://maven.apache.org/POM/4.0.0"}
@@ -45,6 +56,7 @@ def find_poms(root_dir: str) -> List[str]:
     MAVEN_PROJECT_SKIP_DIRS = {"src", "target", "test"}
 
     poms: List[str] = []
+    logger.info(f"Scanning for pom.xml files under: {root_dir}")
     for dirpath, dirnames, filenames in os.walk(root_dir):
         # Check if current directory is a Maven project (has pom.xml)
         is_maven_project = "pom.xml" in filenames
@@ -58,8 +70,11 @@ def find_poms(root_dir: str) -> List[str]:
         dirnames[:] = [d for d in dirnames if d not in skip_dirs]
 
         if is_maven_project:
-            poms.append(os.path.join(dirpath, "pom.xml"))
+            pom_path = os.path.join(dirpath, "pom.xml")
+            poms.append(pom_path)
+            logger.info(f"  Found pom: {pom_path}")
 
+    logger.info(f"Found {len(poms)} pom.xml file(s)")
     return sorted(poms)
 
 
@@ -181,6 +196,7 @@ def run_mvn_dependency_tree(pom_dir: str) -> Tuple[bool, str, str]:
     Returns (success, dot_text, stderr_or_error).
     """
     import tempfile
+    logger.info(f"  Running: mvn dependency:tree (in {pom_dir})")
     dot_path = os.path.join(tempfile.gettempdir(), f"depgraph_{os.getpid()}_{abs(hash(pom_dir))}.dot")
     # remove any stale dot file so mvn doesn't append/merge
     if os.path.exists(dot_path):
@@ -193,13 +209,17 @@ def run_mvn_dependency_tree(pom_dir: str) -> Tuple[bool, str, str]:
             shell=(os.name == "nt"),   # Windows needs shell to resolve mvn.cmd
         )
     except FileNotFoundError:
+        logger.error("  `mvn` executable not found on PATH")
         return False, "", "`mvn` executable not found on PATH"
     except subprocess.TimeoutExpired:
+        logger.error("  mvn dependency:tree timed out after 300s")
         return False, "", "mvn dependency:tree timed out after 300s"
     if proc.returncode != 0:
+        logger.error(f"  mvn failed with exit code {proc.returncode}")
         return False, "", proc.stderr or proc.stdout
     if not os.path.exists(dot_path):
         # fallback: some setups ignore -DoutputFile, parse stdout instead
+        logger.error("  mvn produced no DOT output file")
         return False, "", "mvn produced no DOT output file"
     try:
         with open(dot_path) as f:
@@ -210,7 +230,9 @@ def run_mvn_dependency_tree(pom_dir: str) -> Tuple[bool, str, str]:
         except OSError:
             pass
     if not dot.strip():
+        logger.error("  mvn produced empty DOT output")
         return False, "", "mvn produced empty DOT output"
+    logger.info(f"  Maven analysis complete ({len(dot)} bytes of DOT output)")
     return True, dot, ""
 
 
@@ -249,15 +271,29 @@ def save_cache(cache_dir: str, pom_path: str, data: dict) -> None:
 def build_model(root_dir: str, cache_dir: str,
                 force_reload: bool = False) -> GraphModel:
     """Discover poms, run/parse Maven, cache, and return a GraphModel."""
+    logger.info(f"Building dependency model from: {root_dir}")
+    if force_reload:
+        logger.info("Force reload enabled - bypassing cache")
+
     model = GraphModel()
     poms = find_poms(root_dir)
 
-    for pom_path in poms:
+    if not poms:
+        logger.warning("No pom.xml files found!")
+        return model
+
+    total = len(poms)
+    for i, pom_path in enumerate(poms, 1):
+        logger.info(f"[{i}/{total}] Processing: {pom_path}")
+
         gid, aid, ver = parse_pom_coords(pom_path)
         # Skip poms that couldn't be parsed (invalid XML, binary, etc.)
         if gid == "unknown" and aid == "unknown" and ver == "unknown":
+            logger.warning(f"  Skipping unparseable pom: {pom_path}")
             continue
+
         coord_id = f"{gid}:{aid}:{ver}"
+        logger.info(f"  Coordinates: {coord_id}")
         pom_dir = os.path.dirname(pom_path)
         mtime = os.path.getmtime(pom_path)
 
@@ -270,19 +306,26 @@ def build_model(root_dir: str, cache_dir: str,
 
         if cached and cached.get("mtime") == mtime:
             # use cached tree
+            logger.info("  Using cached dependency tree")
             tree_dict = cached.get("tree")
             if tree_dict:
                 from graph_model import _tree_from_dict
                 module.tree = _tree_from_dict(tree_dict)
             module.error = cached.get("error")
         else:
+            logger.info("  Running Maven dependency analysis...")
             ok, dot, err = run_mvn_dependency_tree(pom_dir)
             if ok:
                 module.tree = parse_dot_to_tree(dot, coord_id)
                 if module.tree is None:
                     module.error = "Root module not found in DOT output"
+                    logger.error(f"  {module.error}")
+                else:
+                    dep_count = _count_tree_nodes(module.tree)
+                    logger.info(f"  Parsed {dep_count} dependencies")
             else:
                 module.error = err
+                logger.error(f"  Maven error: {err}")
             save_cache(cache_dir, pom_path, {
                 "mtime": mtime,
                 "tree": module.tree.to_dict() if module.tree else None,
@@ -291,4 +334,13 @@ def build_model(root_dir: str, cache_dir: str,
 
         model.add_module(module)
 
+    logger.info(f"Model complete: {len(model.modules)} module(s) loaded")
     return model
+
+
+def _count_tree_nodes(node: TreeNode) -> int:
+    """Recursively count nodes in a dependency tree."""
+    count = 1
+    for child in node.children:
+        count += _count_tree_nodes(child)
+    return count
