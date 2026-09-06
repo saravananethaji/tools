@@ -32,19 +32,34 @@ NS_FALLBACK = {"m": ""}
 # ----------------------------------------------------------------------
 
 def find_poms(root_dir: str) -> List[str]:
-    """Find all pom.xml files under root_dir (excluding target/, src/, test/
-    and other common non-source directories that may contain invalid pom.xml files)."""
-    SKIP_DIRS = {
-        "target", "src", "test",
+    """Find all pom.xml files under root_dir.
+
+    For Maven projects (directories containing pom.xml), skip their
+    src/, target/, and test/ subdirectories during traversal. Also skip
+    common non-source directories globally.
+    """
+    GLOBAL_SKIP_DIRS = {
         "node_modules", ".git", ".idea", ".vscode",
         "dist", "build", "out", "__pycache__",
     }
+    MAVEN_PROJECT_SKIP_DIRS = {"src", "target", "test"}
+
     poms: List[str] = []
     for dirpath, dirnames, filenames in os.walk(root_dir):
-        # skip build output and IDE dirs
-        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
-        if "pom.xml" in filenames:
+        # Check if current directory is a Maven project (has pom.xml)
+        is_maven_project = "pom.xml" in filenames
+
+        # Filter directories to skip during traversal
+        skip_dirs = set(GLOBAL_SKIP_DIRS)
+        if is_maven_project:
+            # Only skip src/target/test inside actual Maven projects
+            skip_dirs.update(MAVEN_PROJECT_SKIP_DIRS)
+
+        dirnames[:] = [d for d in dirnames if d not in skip_dirs]
+
+        if is_maven_project:
             poms.append(os.path.join(dirpath, "pom.xml"))
+
     return sorted(poms)
 
 
