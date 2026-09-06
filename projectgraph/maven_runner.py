@@ -32,11 +32,16 @@ NS_FALLBACK = {"m": ""}
 # ----------------------------------------------------------------------
 
 def find_poms(root_dir: str) -> List[str]:
-    """Find all pom.xml files under root_dir (excluding target/)."""
+    """Find all pom.xml files under root_dir (excluding target/ and other
+    common non-source directories that may contain invalid pom.xml files)."""
+    SKIP_DIRS = {
+        "target", "node_modules", ".git", ".idea", ".vscode",
+        "dist", "build", "out", "__pycache__",
+    }
     poms: List[str] = []
     for dirpath, dirnames, filenames in os.walk(root_dir):
-        # skip build output dirs
-        dirnames[:] = [d for d in dirnames if d != "target"]
+        # skip build output and IDE dirs
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
         if "pom.xml" in filenames:
             poms.append(os.path.join(dirpath, "pom.xml"))
     return sorted(poms)
@@ -59,9 +64,13 @@ def parse_pom_coords(pom_path: str) -> Tuple[str, str, str]:
     """Return (groupId, artifactId, version) from a pom.xml.
     Namespace-agnostic (handles both the standard maven namespace and
     custom/fake namespaces). Inherits parent groupId/version if not set.
+    Returns ("unknown", "unknown", "unknown") if the file cannot be parsed.
     """
-    tree = ET.parse(pom_path)
-    root = tree.getroot()
+    try:
+        tree = ET.parse(pom_path)
+        root = tree.getroot()
+    except (ET.ParseError, OSError, UnicodeDecodeError):
+        return "unknown", "unknown", "unknown"
 
     def _text(tag):
         el = _find_local(root, tag)
@@ -229,6 +238,9 @@ def build_model(root_dir: str, cache_dir: str,
 
     for pom_path in poms:
         gid, aid, ver = parse_pom_coords(pom_path)
+        # Skip poms that couldn't be parsed (invalid XML, binary, etc.)
+        if gid == "unknown" and aid == "unknown" and ver == "unknown":
+            continue
         coord_id = f"{gid}:{aid}:{ver}"
         pom_dir = os.path.dirname(pom_path)
         mtime = os.path.getmtime(pom_path)
