@@ -32,10 +32,11 @@ NS_FALLBACK = {"m": ""}
 # ----------------------------------------------------------------------
 
 def find_poms(root_dir: str) -> List[str]:
-    """Find all pom.xml files under root_dir (excluding target/ and other
-    common non-source directories that may contain invalid pom.xml files)."""
+    """Find all pom.xml files under root_dir (excluding target/, src/, test/
+    and other common non-source directories that may contain invalid pom.xml files)."""
     SKIP_DIRS = {
-        "target", "node_modules", ".git", ".idea", ".vscode",
+        "target", "src", "test",
+        "node_modules", ".git", ".idea", ".vscode",
         "dist", "build", "out", "__pycache__",
     }
     poms: List[str] = []
