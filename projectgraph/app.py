@@ -17,7 +17,7 @@ import os
 import sys
 from pathlib import Path
 
-from fastapi import FastAPI, Request, Form, HTTPException, status
+from fastapi import FastAPI, Request, Form, HTTPException, status, UploadFile, File
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -28,6 +28,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from maven_runner import build_model
 from neo4j_export import export_cypher
+from pom_parser import parse_pom, PomInfo, Dependency, Plugin, ParentInfo
 
 # Configure logging
 logging.basicConfig(
@@ -218,6 +219,117 @@ async def api_load(root: str = Form(...)):
     count = len(_state["model"].modules)
     logger.info(f"Load complete: {count} module(s)")
     return JSONResponse({"ok": True, "modules": count})
+
+
+@app.post("/api/load-json")
+async def api_load_json(file: UploadFile = File(...)):
+    """Load a previously exported JSON analysis file from maven_extractor.py"""
+    logger.info(f"Loading JSON file: {file.filename}")
+    
+    if not file.filename or not file.filename.endswith('.json'):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="File must be a .json file"
+        )
+    
+    try:
+        content = await file.read()
+        data = json.loads(content.decode('utf-8'))
+    except json.JSONDecodeError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid JSON: {e}"
+        )
+    
+    # Validate JSON structure
+    if "projects" not in data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="JSON must contain 'projects' array"
+        )
+    
+    # Convert JSON projects to GraphModel
+    from graph_model import GraphModel, Module, TreeNode
+    
+    model = GraphModel()
+    
+    for p in data["projects"]:
+        try:
+            coord = p["coordinates"]
+            pom = PomInfo(
+                path=p.get("path", ""),
+                directory=p.get("directory", ""),
+                groupId=coord["groupId"],
+                artifactId=coord["artifactId"],
+                version=coord["version"],
+                packaging=coord.get("packaging", "jar"),
+                name=p.get("name"),
+                description=p.get("description"),
+                parent=ParentInfo(**p["parent"]) if p.get("parent") else None,
+                modules=p.get("modules", []),
+                dependencies=[Dependency(**d) for d in p.get("dependencies", [])],
+                dependency_management=[Dependency(**d) for d in p.get("dependency_management", [])],
+                plugins=[Plugin(**pl) for pl in p.get("plugins", [])],
+                properties=p.get("properties", {}),
+            )
+            
+            # Build module
+            module = Module(
+                pom_path=pom.path or f"{pom.groupId}/{pom.artifactId}/pom.xml",
+                dir_path=pom.directory,
+                coord_id=pom.coord,
+                groupId=pom.groupId,
+                artifactId=pom.artifactId,
+                version=pom.version,
+            )
+            
+            # If DOT dependencies exist, build tree from them
+            dot_deps = p.get("dot_dependencies", [])
+            if dot_deps:
+                # Build adjacency from DOT edges
+                from pom_parser import parse_maven_coordinate as pom_parse_coord
+                adj = {}
+                node_meta = {}
+                for d in dot_deps:
+                    src = pom_parse_coord(d["from"])
+                    dst = pom_parse_coord(d["to"])
+                    node_meta[src["id"]] = src
+                    node_meta[dst["id"]] = dst
+                    adj.setdefault(src["id"], []).append(dst["id"])
+                
+                if module.coord_id in node_meta:
+                    built = {}
+                    def build(coord_id):
+                        if coord_id in built:
+                            return built[coord_id]
+                        meta = node_meta[coord_id]
+                        node = TreeNode(
+                            coord_id=coord_id,
+                            groupId=meta["groupId"],
+                            artifactId=meta["artifactId"],
+                            version=meta["version"],
+                            scope=meta.get("scope", "compile"),
+                            packaging=meta.get("packaging", "jar"),
+                        )
+                        built[coord_id] = node
+                        for child_id in adj.get(coord_id, []):
+                            if child_id in built:
+                                continue
+                            node.children.append(build(child_id))
+                        return node
+                    
+                    module.tree = build(module.coord_id)
+            
+            model.add_module(module)
+            
+        except Exception as e:
+            logger.warning(f"Skipping project {p.get('coordinates', {}).get('groupId', 'unknown')}: {e}")
+            continue
+    
+    _state["model"] = model
+    _state["root"] = data.get("metadata", {}).get("root_directory", "loaded-from-json")
+    logger.info(f"Loaded {len(model.modules)} modules from JSON")
+    return JSONResponse({"ok": True, "modules": len(model.modules)})
 
 
 if __name__ == "__main__":
