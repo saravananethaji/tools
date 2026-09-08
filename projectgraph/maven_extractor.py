@@ -444,9 +444,8 @@ class MavenScanner:
         self._find_poms_and_dots()
         print(f"Found {len(self.poms)} pom.xml files")
 
-        # Parse all POMs first (needed for classification)
-        for pom_path in self.poms:
-            pass  # Already parsed in _find_poms_and_dots
+        # Validate nested project discovery
+        self._validate_nested_discovery()
 
         # Build analysis
         analyses = []
@@ -471,12 +470,45 @@ class MavenScanner:
 
         return analyses
 
+    def _validate_nested_discovery(self):
+        """Validate that nested Maven projects were discovered correctly."""
+        # Check for POMs that declare modules but we didn't find all of them
+        for pom in self.poms:
+            if not pom.modules:
+                continue
+
+            pom_dir = pom.directory
+            for module_path in pom.modules:
+                # Resolve module path (handle relative paths like ../other-module)
+                if module_path.startswith(".."):
+                    expected_dir = os.path.normpath(os.path.join(pom_dir, module_path))
+                else:
+                    expected_dir = os.path.normpath(os.path.join(pom_dir, module_path))
+
+                expected_pom = os.path.join(expected_dir, "pom.xml")
+
+                # Check if we found this nested module
+                found = any(p.path == expected_pom for p in self.poms)
+                if not found:
+                    if os.path.exists(expected_pom):
+                        print(f"  [WARN] Nested module not discovered: {expected_pom}")
+                        print(f"         (declared in {pom.coord})")
+                    else:
+                        print(f"  [INFO] Module path does not exist: {expected_pom}")
+
     def _find_poms_and_dots(self):
         """Walk directory tree, find pom.xml and .dot files.
         
         For Maven projects (directories containing pom.xml), skip their
         src/, target/, and test/ subdirectories during traversal. Also skip
         common non-source directories globally.
+        
+        IMPORTANT: This handles NESTED Maven projects correctly:
+        - A directory with pom.xml will have its src/target/test skipped
+        - But subdirectories WITH their own pom.xml are still traversed
+        - Example:
+            root/pom.xml          → found, skips root/src, root/target
+            root/module/pom.xml   → found, skips root/module/src, root/module/target
         """
         for dirpath, dirnames, filenames in os.walk(self.root_dir):
             # Check if current directory is a Maven project (has pom.xml)
@@ -492,16 +524,22 @@ class MavenScanner:
                 if skipped:
                     print(f"  [SKIP] {dirpath}: {', '.join(skipped)}")
 
+            # IMPORTANT: dirnames[:] modifies the list in-place, which affects
+            # os.walk's traversal. We skip src/target/test, but we do NOT skip
+            # subdirectories that might contain their own pom.xml (nested modules).
             dirnames[:] = [d for d in dirnames if d not in skip_dirs]
 
-            # Parse pom.xml
+            # Parse pom.xml in current directory
             if is_maven_project:
                 pom_path = os.path.join(dirpath, "pom.xml")
                 pom = parse_pom(pom_path)
                 if pom:
                     self.poms.append(pom)
+                    # Log nested modules for visibility
+                    if pom.modules:
+                        print(f"  [MODULES] {pom.coord}: {', '.join(pom.modules)}")
 
-            # Look for .dot files
+            # Look for .dot files in current directory
             for filename in filenames:
                 if filename.endswith(".dot"):
                     dot_path = os.path.join(dirpath, filename)
