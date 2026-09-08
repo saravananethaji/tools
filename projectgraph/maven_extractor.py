@@ -40,6 +40,10 @@ class ParentInfo:
     def coord(self) -> str:
         return f"{self.groupId}:{self.artifactId}:{self.version}"
 
+    @property
+    def ga(self) -> str:
+        return f"{self.groupId}:{self.artifactId}"
+
 
 @dataclass
 class Dependency:
