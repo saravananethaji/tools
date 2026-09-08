@@ -14,11 +14,13 @@ Example:
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import sys
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -844,17 +846,129 @@ class MarkdownReportGenerator:
 
 
 # ----------------------------------------------------------------------
+# JSON Export (for Project Graph loading)
+# ----------------------------------------------------------------------
+
+class JSONExporter:
+    """Export analysis as JSON for Project Graph consumption."""
+
+    def __init__(self, analyses: List[ProjectAnalysis]):
+        self.analyses = analyses
+
+    def export(self) -> dict:
+        """Export all analysis data as JSON-serializable dict."""
+        return {
+            "metadata": {
+                "generated_at": datetime.now().isoformat(),
+                "root_directory": self._root_dir(),
+                "total_projects": len(self.analyses),
+            },
+            "projects": [self._project_to_dict(a) for a in self.analyses],
+        }
+
+    def _root_dir(self) -> str:
+        if self.analyses:
+            paths = [a.pom.directory for a in self.analyses]
+            return os.path.commonpath(paths) if paths else "unknown"
+        return "unknown"
+
+    def _project_to_dict(self, a: ProjectAnalysis) -> dict:
+        p = a.pom
+        return {
+            "path": p.path,
+            "directory": p.directory,
+            "coordinates": {
+                "groupId": p.groupId,
+                "artifactId": p.artifactId,
+                "version": p.version,
+                "packaging": p.packaging,
+            },
+            "name": p.name,
+            "description": p.description,
+            "project_type": a.project_type,
+            "classification_reason": a.classification_reason,
+            "parent": {
+                "groupId": p.parent.groupId,
+                "artifactId": p.parent.artifactId,
+                "version": p.parent.version,
+                "relativePath": p.parent.relativePath,
+            } if p.parent else None,
+            "modules": p.modules,
+            "dependencies": [
+                {
+                    "groupId": d.groupId,
+                    "artifactId": d.artifactId,
+                    "version": d.version,
+                    "scope": d.scope,
+                    "type": d.type,
+                }
+                for d in p.dependencies
+            ],
+            "dependency_management": [
+                {
+                    "groupId": d.groupId,
+                    "artifactId": d.artifactId,
+                    "version": d.version,
+                    "scope": d.scope,
+                    "type": d.type,
+                }
+                for d in p.dependency_management
+            ],
+            "plugins": [
+                {
+                    "groupId": pl.groupId,
+                    "artifactId": pl.artifactId,
+                    "version": pl.version,
+                }
+                for pl in p.plugins
+            ],
+            "properties": p.properties,
+            "dot_file": a.dot_file,
+            "dot_dependencies": [
+                {
+                    "from": d.from_coord,
+                    "to": d.to_coord,
+                    "scope": d.scope,
+                }
+                for d in a.dot_dependencies
+            ] if a.dot_dependencies else None,
+        }
+
+
+# ----------------------------------------------------------------------
 # Main
 # ----------------------------------------------------------------------
 
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: python maven_extractor.py <root_directory> [output_file.md]")
-        print("Example: python maven_extractor.py C:/product/tools/githubrepo output.md")
-        sys.exit(1)
+    import argparse
+    parser = argparse.ArgumentParser(
+        description="Maven Project Structure Extractor",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python maven_extractor.py /path/to/projects
+  python maven_extractor.py /path/to/projects -o analysis.md
+  python maven_extractor.py /path/to/projects -o analysis.json --format json
+  python maven_extractor.py /path/to/projects -o analysis.md --format markdown
+        """
+    )
+    parser.add_argument("root_dir", help="Root directory containing Maven projects")
+    parser.add_argument("-o", "--output", help="Output file (default: maven_analysis.md)")
+    parser.add_argument(
+        "-f", "--format",
+        choices=["markdown", "json", "both"],
+        default="markdown",
+        help="Output format (default: markdown)"
+    )
+    parser.add_argument(
+        "-v", "--verbose",
+        action="store_true",
+        help="Verbose logging"
+    )
+    args = parser.parse_args()
 
-    root_dir = sys.argv[1]
-    output_file = sys.argv[2] if len(sys.argv) > 2 else "maven_analysis.md"
+    root_dir = args.root_dir
+    output_base = args.output or "maven_analysis"
 
     if not os.path.isdir(root_dir):
         print(f"Error: {root_dir} is not a directory")
@@ -864,19 +978,34 @@ def main():
     scanner = MavenScanner(root_dir)
     analyses = scanner.scan()
 
-    # Generate report
-    print(f"Generating report: {output_file}")
-    generator = MarkdownReportGenerator(analyses)
-    report = generator.generate()
+    # Generate requested outputs
+    if args.format in ("markdown", "both"):
+        md_file = output_base if output_base.endswith(".md") else output_base + ".md"
+        print(f"Generating Markdown report: {md_file}")
+        generator = MarkdownReportGenerator(analyses)
+        report = generator.generate()
+        with open(md_file, "w", encoding="utf-8") as f:
+            f.write(report)
 
-    # Write output
-    with open(output_file, "w", encoding="utf-8") as f:
-        f.write(report)
+    if args.format in ("json", "both"):
+        json_file = output_base if output_base.endswith(".json") else output_base + ".json"
+        print(f"Generating JSON export: {json_file}")
+        exporter = JSONExporter(analyses)
+        data = exporter.export()
+        with open(json_file, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
 
-    print(f"Done! Report written to: {output_file}")
-    print(f"  - {len(analyses)} projects analyzed")
-    print(f"  - {len(generator.by_type)} project types identified")
+    print(f"Done! {len(analyses)} projects analyzed")
+    print(f"  - {len(set(a.project_type for a in analyses))} project types identified")
+
+    # Print type summary
+    from collections import Counter
+    type_counts = Counter(a.project_type for a in analyses)
+    for t, c in sorted(type_counts.items()):
+        print(f"    {t}: {c}")
 
 
 if __name__ == "__main__":
+    from datetime import datetime
+    import json
     main()
