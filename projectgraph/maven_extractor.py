@@ -472,15 +472,25 @@ class MavenScanner:
         return analyses
 
     def _find_poms_and_dots(self):
-        """Walk directory tree, find pom.xml and .dot files."""
+        """Walk directory tree, find pom.xml and .dot files.
+        
+        For Maven projects (directories containing pom.xml), skip their
+        src/, target/, and test/ subdirectories during traversal. Also skip
+        common non-source directories globally.
+        """
         for dirpath, dirnames, filenames in os.walk(self.root_dir):
-            # Check if current directory is a Maven project
+            # Check if current directory is a Maven project (has pom.xml)
             is_maven_project = "pom.xml" in filenames
 
-            # Filter directories to skip
+            # Filter directories to skip during traversal
             skip_dirs = set(self.SKIP_DIRS)
             if is_maven_project:
+                # Only skip src/target/test inside actual Maven projects
                 skip_dirs.update(self.MAVEN_SKIP_DIRS)
+                # Log what we're skipping for visibility
+                skipped = [d for d in dirnames if d in self.MAVEN_SKIP_DIRS]
+                if skipped:
+                    print(f"  [SKIP] {dirpath}: {', '.join(skipped)}")
 
             dirnames[:] = [d for d in dirnames if d not in skip_dirs]
 
