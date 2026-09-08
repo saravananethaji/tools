@@ -65,6 +65,13 @@ class TreeNode:
     scope: str
     packaging: str
     children: List["TreeNode"] = field(default_factory=list)
+    # Version metadata (populated during analysis)
+    versionOverride: bool = False      # Direct POM override of BOM/parent
+    versionExtended: bool = False      # Version range explicitly widened
+    bomImported: bool = False          # Version from BOM dependencyManagement
+    usesPackageGen: bool = False       # Uses Package Gen Maven plugin
+    versionConflict: bool = False      # Version conflict detected in tree
+    displayOverride: str = ""          # Visual override indicator text
 
     @property
     def display(self) -> str:
