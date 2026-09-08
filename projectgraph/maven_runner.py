@@ -13,7 +13,7 @@ import os
 import re
 import subprocess
 import sys
-import xml.etree.ElementTree as ET
+import hashlib
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -24,6 +24,14 @@ from graph_model import (
     parse_maven_coordinate,
 )
 
+from pom_parser import (
+    parse_pom,
+    parse_dot_file,
+    find_poms,
+    parse_maven_coordinate as pom_parse_maven_coordinate,
+    ProjectClassifier,
+)
+
 # Configure logging to console
 logging.basicConfig(
     level=logging.INFO,
@@ -32,102 +40,6 @@ logging.basicConfig(
     stream=sys.stdout,
 )
 logger = logging.getLogger("projectgraph")
-
-
-NS = {"m": "http://maven.apache.org/POM/4.0.0"}
-NS_FALLBACK = {"m": ""}
-
-
-# ----------------------------------------------------------------------
-# Pom discovery
-# ----------------------------------------------------------------------
-
-def find_poms(root_dir: str) -> List[str]:
-    """Find all pom.xml files under root_dir.
-
-    For Maven projects (directories containing pom.xml), skip their
-    src/, target/, and test/ subdirectories during traversal. Also skip
-    common non-source directories globally.
-    """
-    GLOBAL_SKIP_DIRS = {
-        "node_modules", ".git", ".idea", ".vscode",
-        "dist", "build", "out", "__pycache__",
-    }
-    MAVEN_PROJECT_SKIP_DIRS = {"src", "target", "test"}
-
-    poms: List[str] = []
-    logger.info(f"Scanning for pom.xml files under: {root_dir}")
-    for dirpath, dirnames, filenames in os.walk(root_dir):
-        # Check if current directory is a Maven project (has pom.xml)
-        is_maven_project = "pom.xml" in filenames
-
-        # Filter directories to skip during traversal
-        skip_dirs = set(GLOBAL_SKIP_DIRS)
-        if is_maven_project:
-            # Only skip src/target/test inside actual Maven projects
-            skip_dirs.update(MAVEN_PROJECT_SKIP_DIRS)
-
-        dirnames[:] = [d for d in dirnames if d not in skip_dirs]
-
-        if is_maven_project:
-            pom_path = os.path.join(dirpath, "pom.xml")
-            poms.append(pom_path)
-            logger.info(f"  Found pom: {pom_path}")
-
-    logger.info(f"Found {len(poms)} pom.xml file(s)")
-    return sorted(poms)
-
-
-def _localname(tag: str) -> str:
-    """Strip XML namespace from an ElementTree tag."""
-    return tag.rsplit("}", 1)[-1] if "}" in tag else tag
-
-
-def _find_local(root, tag):
-    """Find first child of root whose local tag name matches, ignoring namespace."""
-    for el in root:
-        if _localname(el.tag) == tag:
-            return el
-    return None
-
-
-def parse_pom_coords(pom_path: str) -> Tuple[str, str, str]:
-    """Return (groupId, artifactId, version) from a pom.xml.
-    Namespace-agnostic (handles both the standard maven namespace and
-    custom/fake namespaces). Inherits parent groupId/version if not set.
-    Returns ("unknown", "unknown", "unknown") if the file cannot be parsed.
-    """
-    try:
-        tree = ET.parse(pom_path)
-        root = tree.getroot()
-    except (ET.ParseError, OSError, UnicodeDecodeError):
-        return "unknown", "unknown", "unknown"
-
-    def _text(tag):
-        el = _find_local(root, tag)
-        return el.text.strip() if el is not None and el.text else None
-
-    gid = _text("groupId")
-    aid = _text("artifactId")
-    ver = _text("version")
-
-    # inherit from parent if missing
-    if not gid or not ver:
-        parent = _find_local(root, "parent")
-        if parent is not None:
-            if not gid:
-                p = _find_local(parent, "groupId")
-                if p is not None and p.text:
-                    gid = p.text.strip()
-            if not ver:
-                p = _find_local(parent, "version")
-                if p is not None and p.text:
-                    ver = p.text.strip()
-
-    gid = gid or "unknown"
-    aid = aid or "unknown"
-    ver = ver or "unknown"
-    return gid, aid, ver
 
 
 # ----------------------------------------------------------------------
@@ -196,6 +108,8 @@ def run_mvn_dependency_tree(pom_dir: str) -> Tuple[bool, str, str]:
     Returns (success, dot_text, stderr_or_error).
     """
     import tempfile
+    import shutil
+    
     logger.info(f"  Running: mvn dependency:tree (in {pom_dir})")
     dot_path = os.path.join(tempfile.gettempdir(), f"depgraph_{os.getpid()}_{abs(hash(pom_dir))}.dot")
     # remove any stale dot file so mvn doesn't append/merge
@@ -203,10 +117,18 @@ def run_mvn_dependency_tree(pom_dir: str) -> Tuple[bool, str, str]:
         os.remove(dot_path)
     cmd = ["mvn", "dependency:tree", "-DoutputType=dot",
            f"-DoutputFile={dot_path}", "-q"]
+    
+    # Resolve mvn executable path (avoids shell=True)
+    mvn_cmd = shutil.which("mvn.cmd" if os.name == "nt" else "mvn")
+    if not mvn_cmd:
+        logger.error("  `mvn` executable not found on PATH")
+        return False, "", "`mvn` executable not found on PATH"
+    cmd[0] = mvn_cmd
+    
     try:
         proc = subprocess.run(
             cmd, cwd=pom_dir, capture_output=True, text=True, timeout=300,
-            shell=(os.name == "nt"),   # Windows needs shell to resolve mvn.cmd
+            shell=False,   # SECURITY: No shell injection risk
         )
     except FileNotFoundError:
         logger.error("  `mvn` executable not found on PATH")
@@ -241,8 +163,12 @@ def run_mvn_dependency_tree(pom_dir: str) -> Tuple[bool, str, str]:
 # ----------------------------------------------------------------------
 
 def _cache_key(pom_path: str) -> str:
-    """Stable cache key derived from the pom absolute path."""
-    h = abs(hash(os.path.abspath(pom_path)))
+    """Stable cache key derived from the pom absolute path.
+    Uses SHA256 for consistent cross-process caching (unlike Python's randomized hash()).
+    """
+    import hashlib
+    abs_path = os.path.abspath(pom_path)
+    h = hashlib.sha256(abs_path.encode()).hexdigest()[:16]
     return f"{h}.json"
 
 
@@ -276,32 +202,38 @@ def build_model(root_dir: str, cache_dir: str,
         logger.info("Force reload enabled - bypassing cache")
 
     model = GraphModel()
-    poms = find_poms(root_dir)
+    
+    # Use shared parser to find and parse all POMs
+    pom_infos = []
+    for pom_path in find_poms(root_dir):
+        pom = parse_pom(pom_path)
+        if pom:
+            pom_infos.append(pom)
 
-    if not poms:
+    if not pom_infos:
         logger.warning("No pom.xml files found!")
         return model
 
-    total = len(poms)
-    for i, pom_path in enumerate(poms, 1):
-        logger.info(f"[{i}/{total}] Processing: {pom_path}")
+    # Classify all projects first (needed for dependency analysis)
+    classifier = ProjectClassifier()
+    project_types = {}
+    for pom in pom_infos:
+        ptype, reason = classifier.classify(pom, pom_infos)
+        project_types[pom.path] = (ptype, reason)
+        logger.info(f"  Classified {pom.coord} as: {ptype} ({reason})")
 
-        gid, aid, ver = parse_pom_coords(pom_path)
-        # Skip poms that couldn't be parsed (invalid XML, binary, etc.)
-        if gid == "unknown" and aid == "unknown" and ver == "unknown":
-            logger.warning(f"  Skipping unparseable pom: {pom_path}")
-            continue
+    total = len(pom_infos)
+    for i, pom in enumerate(pom_infos, 1):
+        logger.info(f"[{i}/{total}] Processing: {pom.path}")
+        logger.info(f"  Coordinates: {pom.coord}")
+        pom_dir = pom.directory
+        mtime = os.path.getmtime(pom.path)
 
-        coord_id = f"{gid}:{aid}:{ver}"
-        logger.info(f"  Coordinates: {coord_id}")
-        pom_dir = os.path.dirname(pom_path)
-        mtime = os.path.getmtime(pom_path)
-
-        cached = None if force_reload else load_cache(cache_dir, pom_path)
+        cached = None if force_reload else load_cache(cache_dir, pom.path)
 
         module = Module(
-            pom_path=pom_path, dir_path=pom_dir,
-            coord_id=coord_id, groupId=gid, artifactId=aid, version=ver,
+            pom_path=pom.path, dir_path=pom_dir,
+            coord_id=pom.coord, groupId=pom.groupId, artifactId=pom.artifactId, version=pom.version,
         )
 
         if cached and cached.get("mtime") == mtime:
@@ -316,7 +248,7 @@ def build_model(root_dir: str, cache_dir: str,
             logger.info("  Running Maven dependency analysis...")
             ok, dot, err = run_mvn_dependency_tree(pom_dir)
             if ok:
-                module.tree = parse_dot_to_tree(dot, coord_id)
+                module.tree = parse_dot_to_tree(dot, module.coord_id)
                 if module.tree is None:
                     module.error = "Root module not found in DOT output"
                     logger.error(f"  {module.error}")

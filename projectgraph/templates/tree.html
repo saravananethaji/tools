@@ -1,10 +1,14 @@
 {% extends "base.html" %}
-{% block title %}Dependency Tree · Maven Graph{% endblock %}
+{% block title %}Dependency Hierarchy · Maven Graph{% endblock %}
 {% block content %}
 <div class="toolbar">
-  <input type="text" id="search" placeholder="Search dependencies (groupId / artifactId / version)…" value="{{ query }}" autocomplete="off">
+  <input type="text" id="search" placeholder="Search modules/dependencies (groupId / artifactId / version)…" value="{{ query }}" autocomplete="off">
   <button class="btn" onclick="reload()">↻ Reload</button>
   <span id="count" class="small"></span>
+  <div class="btn-group" style="margin-left:1rem;">
+    <button class="btn btn-secondary" onclick="toggleAll(false)">Collapse All</button>
+    <button class="btn btn-secondary" onclick="toggleAll(true)">Expand All</button>
+  </div>
 </div>
 
 <div id="modules">
@@ -32,22 +36,77 @@
 <script>
 const MODULES = {{ modules | tojson }};
 
-function renderTree(container, node, query) {
+// Render a tree node with full hierarchy info
+function renderTree(container, node, query, level = 0) {
   const li = document.createElement('li');
   li.className = 'node';
+  
+  // Build row with indentation showing hierarchy depth
+  const indent = level * 18;
   const row = document.createElement('div');
   row.className = 'row';
+  row.style.paddingLeft = indent + 'px';
+  row.style.borderLeft = '1px solid #e0e0e0';
+  
   const name = document.createElement('span');
   name.className = 'name';
   name.textContent = node.groupId + ':' + node.artifactId + ':' + node.version;
+  
   const ver = document.createElement('span');
   ver.className = 'version-pill';
   ver.textContent = node.version;
+  
+  // VERSION INDICATORS
   const scope = document.createElement('span');
   scope.className = 'scope-pill';
-  scope.textContent = node.scope;
+  scope.textContent = node.scope || 'compile';
+  
+  // Override indicator (direct POM override of BOM)
+  if (node.versionOverride) {
+    const overrideBadge = document.createElement('span');
+    overrideBadge.className = 'scope-pill override-badge';
+    overrideBadge.title = 'Version overridden in this POM';
+    overrideBadge.innerHTML = '↕';
+    scope.appendChild(overrideBadge);
+  }
+  
+  // Extension indicator (version range explicitly widened)
+  if (node.versionExtended) {
+    const extBadge = document.createElement('span');
+    extBadge.className = 'scope-pill ext-badge';
+    extBadge.title = 'Version range explicitly extended';
+    extBadge.innerHTML = '🟡';
+    scope.appendChild(extBadge);
+  }
+  
+  // BOM import marker
+  if (node.bomImported) {
+    const bomBadge = document.createElement('span');
+    bomBadge.className = 'scope-pill bom-badge';
+    bomBadge.title = 'Version from BOM dependencyManagement';
+    bomBadge.innerHTML = '🔗';
+    scope.appendChild(bomBadge);
+  }
+  
+  // Package Gen plugin usage
+  if (node.usesPackageGen) {
+    const pgBadge = document.createElement('span');
+    pgBadge.className = 'scope-pill plugin-badge';
+    pgBadge.title = 'Uses Package Gen Maven plugin';
+    pgBadge.innerHTML = '📦';
+    scope.appendChild(pgBadge);
+  }
+  
+  // Conflict marker
+  if (node.versionConflict) {
+    const conflictBadge = document.createElement('span');
+    conflictBadge.className = 'scope-pill conflict-badge';
+    conflictBadge.title = 'Version conflict detected';
+    conflictBadge.innerHTML = '⚠';
+    scope.appendChild(conflictBadge);
+  }
+  
   row.append(name, ver, scope);
-  li.appendChild(row);
 
   // search match / dim
   const q = (query || '').toLowerCase();
@@ -63,7 +122,7 @@ function renderTree(container, node, query) {
     const ul = document.createElement('ul');
     ul.className = 'tree';
     for (const c of node.children) {
-      const childLi = renderTree(ul, c, query);
+      const childLi = renderTree(ul, c, query, level + 1);
       if (childLi.dataset.match === 'true') anyDescMatch = true;
     }
     li.appendChild(ul);
@@ -81,8 +140,20 @@ function toggleModule(head) {
   body.style.display = open ? 'none' : '';
   head.querySelector('.caret').textContent = open ? '▶' : '▼';
   if (!open && body.id === '') {
-    // already rendered
+    // already rendered - just ensure it's visible
+    body.style.display = '';
   }
+}
+
+function toggleAll(expanded) {
+  const bodies = document.querySelectorAll('.tree-body');
+  bodies.forEach(body => {
+    body.style.display = expanded ? '' : 'none';
+  });
+  const carets = document.querySelectorAll('.caret');
+  carets.forEach(caret => {
+    caret.textContent = expanded ? '▼' : '▶';
+  });
 }
 
 function buildAll(query) {
@@ -109,6 +180,7 @@ function reload() {
   fetch('/api/reload', {method:'POST'}).then(r=>r.json()).then(()=>location.reload());
 }
 
+// search handler
 document.getElementById('search').addEventListener('input', (e) => {
   buildAll(e.target.value);
 });
@@ -117,7 +189,7 @@ document.getElementById('search').addEventListener('input', (e) => {
 window.addEventListener('DOMContentLoaded', () => {
   buildAll('{{ query }}');
   // expand the first non-error module
-  const first = document.querySelector('.module-head');
+  const first = document.querySelector('.module-head:not(.err)');
   if (first) toggleModule(first);
 });
 </script>

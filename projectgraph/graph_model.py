@@ -92,6 +92,13 @@ class TreeNode:
             "scope": self.scope,
             "packaging": self.packaging,
             "display": self.display,
+            # Version metadata fields
+            "versionOverride": self.versionOverride,
+            "versionExtended": self.versionExtended,
+            "bomImported": self.bomImported,
+            "usesPackageGen": self.usesPackageGen,
+            "versionConflict": self.versionConflict,
+            "displayOverride": self.displayOverride,
             "children": [c.to_dict(_visited) for c in self.children],
         }
 
@@ -261,5 +268,12 @@ def _tree_from_dict(d: dict) -> TreeNode:
         version=d["version"],
         scope=d["scope"],
         packaging=d.get("packaging", "jar"),
+        # Version metadata fields (with defaults for backward compatibility)
+        versionOverride=d.get("versionOverride", False),
+        versionExtended=d.get("versionExtended", False),
+        bomImported=d.get("bomImported", False),
+        usesPackageGen=d.get("usesPackageGen", False),
+        versionConflict=d.get("versionConflict", False),
+        displayOverride=d.get("displayOverride", ""),
         children=[_tree_from_dict(c) for c in d.get("children", [])],
     )
