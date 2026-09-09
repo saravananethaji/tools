@@ -28,27 +28,31 @@ def parse_maven_coordinate(coord_str: str) -> Dict[str, str]:
     cleaned = coord_str.strip().strip('"').strip("'")
     parts = cleaned.split(":")
 
-    def _id(g, a, v):
-        return f"{g}:{a}:{v}"
+    def _id(g, a, packaging, v, classifier=None):
+        parts = [g, a, packaging]
+        if classifier:
+            parts.append(classifier)
+        parts.append(v)
+        return ":".join(parts)
 
     if len(parts) == 5:
         g, a, _t, v, s = parts
-        return {"id": _id(g, a, v), "groupId": g, "artifactId": a,
+        return {"id": _id(g, a, _t, v), "groupId": g, "artifactId": a,
                 "packaging": _t, "version": v, "scope": s}
     if len(parts) == 6:
         g, a, _t, c, v, s = parts
-        return {"id": _id(g, a, v), "groupId": g, "artifactId": a,
+        return {"id": _id(g, a, _t, v, c), "groupId": g, "artifactId": a,
                 "packaging": _t, "classifier": c, "version": v, "scope": s}
     if len(parts) == 4:
         g, a, _t, v = parts
-        return {"id": _id(g, a, v), "groupId": g, "artifactId": a,
+        return {"id": _id(g, a, _t, v), "groupId": g, "artifactId": a,
                 "packaging": _t, "version": v, "scope": "compile"}
 
     # Fallback
     g = parts[0] if len(parts) > 0 else "unknown"
     a = parts[1] if len(parts) > 1 else cleaned
     v = parts[-1] if len(parts) > 2 else "unknown"
-    return {"id": _id(g, a, v), "groupId": g, "artifactId": a,
+    return {"id": _id(g, a, "jar", v), "groupId": g, "artifactId": a,
             "packaging": "jar", "version": v, "scope": "compile"}
 
 
@@ -64,6 +68,7 @@ class TreeNode:
     version: str
     scope: str
     packaging: str
+    classifier: Optional[str] = None
     children: List["TreeNode"] = field(default_factory=list)
     # Version metadata (populated during analysis)
     versionOverride: bool = False      # Direct POM override of BOM/parent
@@ -77,13 +82,33 @@ class TreeNode:
     def display(self) -> str:
         return f"{self.groupId}:{self.artifactId}:{self.version}"
 
+    @property
+    def artifact_id(self) -> str:
+        """Lossless artifact identity used by graph exports and traversal."""
+        parts = [self.groupId, self.artifactId, self.packaging]
+        if self.classifier:
+            parts.append(self.classifier)
+        parts.append(self.version)
+        return ":".join(parts)
+
     def to_dict(self, _visited: Optional[set] = None) -> dict:
         if _visited is None:
             _visited = set()
         # guard against cycles (shouldn't happen now, but belt-and-suspenders)
-        if self.coord_id in _visited:
-            return {"coord_id": self.coord_id, "cycle": True}
-        _visited = _visited | {self.coord_id}
+        if self.artifact_id in _visited:
+            return {
+                "coord_id": self.coord_id,
+                "groupId": self.groupId,
+                "artifactId": self.artifactId,
+                "version": self.version,
+                "scope": self.scope,
+                "packaging": self.packaging,
+                "classifier": self.classifier,
+                "display": self.display,
+                "cycle": True,
+                "children": [],
+            }
+        _visited = _visited | {self.artifact_id}
         return {
             "coord_id": self.coord_id,
             "groupId": self.groupId,
@@ -91,6 +116,7 @@ class TreeNode:
             "version": self.version,
             "scope": self.scope,
             "packaging": self.packaging,
+            "classifier": self.classifier,
             "display": self.display,
             # Version metadata fields
             "versionOverride": self.versionOverride,
@@ -111,6 +137,8 @@ class Module:
     groupId: str
     artifactId: str
     version: str
+    project_type: str = "Other Module"
+    classification_reason: str = "not classified"
     tree: Optional[TreeNode] = None
     error: Optional[str] = None   # set if mvn failed for this module
 
@@ -126,6 +154,8 @@ class Module:
             "groupId": self.groupId,
             "artifactId": self.artifactId,
             "version": self.version,
+            "project_type": self.project_type,
+            "classification_reason": self.classification_reason,
             "display": self.display,
             "tree": self.tree.to_dict() if self.tree else None,
             "error": self.error,
@@ -164,9 +194,9 @@ class GraphModel:
         seen: Dict[str, Dict[str, List[dict]]] = defaultdict(lambda: defaultdict(list))
 
         def walk(node: TreeNode, module: Module, _visited: set):
-            if node.coord_id in _visited:
+            if node.artifact_id in _visited:
                 return
-            _visited = _visited | {node.coord_id}
+            _visited = _visited | {node.artifact_id}
             key = f"{node.groupId}:{node.artifactId}"
             seen[key][node.version].append({
                 "module": module.display,
@@ -198,16 +228,17 @@ class GraphModel:
         """Flat unique list of all artifact coords across all trees."""
         out: Dict[str, dict] = {}
         def walk(node: TreeNode, _visited: set):
-            if node.coord_id in _visited:
+            if node.artifact_id in _visited:
                 return
-            _visited = _visited | {node.coord_id}
-            out[node.coord_id] = {
-                "id": node.coord_id,
+            _visited = _visited | {node.artifact_id}
+            out[node.artifact_id] = {
+                "id": node.artifact_id,
                 "groupId": node.groupId,
                 "artifactId": node.artifactId,
                 "version": node.version,
                 "scope": node.scope,
                 "packaging": node.packaging,
+                "classifier": node.classifier,
             }
             for c in node.children:
                 walk(c, _visited)
@@ -220,13 +251,13 @@ class GraphModel:
         """All dependency edges (from_id -> to_id, scope)."""
         edges: List[dict] = []
         def walk(node: TreeNode, _visited: set):
-            if node.coord_id in _visited:
+            if node.artifact_id in _visited:
                 return
-            _visited = _visited | {node.coord_id}
+            _visited = _visited | {node.artifact_id}
             for c in node.children:
                 edges.append({
-                    "from_id": node.coord_id,
-                    "to_id": c.coord_id,
+                    "from_id": node.artifact_id,
+                    "to_id": c.artifact_id,
                     "scope": c.scope,
                 })
                 walk(c, _visited)
@@ -254,6 +285,8 @@ class GraphModel:
                 groupId=md["groupId"],
                 artifactId=md["artifactId"],
                 version=md["version"],
+                project_type=md.get("project_type", "Other Module"),
+                classification_reason=md.get("classification_reason", "not classified"),
                 tree=tree,
                 error=md.get("error"),
             ))
@@ -261,13 +294,15 @@ class GraphModel:
 
 
 def _tree_from_dict(d: dict) -> TreeNode:
+    parts = d.get("coord_id", "").split(":")
     return TreeNode(
-        coord_id=d["coord_id"],
-        groupId=d["groupId"],
-        artifactId=d["artifactId"],
-        version=d["version"],
-        scope=d["scope"],
+        coord_id=d.get("coord_id", ""),
+        groupId=d.get("groupId", parts[0] if len(parts) > 0 else ""),
+        artifactId=d.get("artifactId", parts[1] if len(parts) > 1 else ""),
+        version=d.get("version", parts[2] if len(parts) > 2 else ""),
+        scope=d.get("scope", "compile"),
         packaging=d.get("packaging", "jar"),
+        classifier=d.get("classifier"),
         # Version metadata fields (with defaults for backward compatibility)
         versionOverride=d.get("versionOverride", False),
         versionExtended=d.get("versionExtended", False),

@@ -9,10 +9,10 @@
 </div>
 
 {% if not conflicts %}
-  <div class="card"><span class="ok">✓ No version conflicts detected.</span></div>
+  <div class="card module-card"><span class="ok">✓ No version conflicts detected.</span></div>
 {% else %}
   {% for c in conflicts %}
-  <div class="card">
+  <div class="card module-card">
     <div class="conflict-row">
       <div>
         <span class="conflict-key">{{ c.artifact_key }}</span>

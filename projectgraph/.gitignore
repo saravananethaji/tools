@@ -5,10 +5,18 @@ __pycache__/
 *.pyo
 
 # App runtime cache (generated dependency trees)
-projectgraph/cache/
+cache/
 
 # Generated export artifacts
-projectgraph/dependency-graph.cypher
+dependency-graph.cypher
+
+# Node and browser-test artifacts
+node_modules/
+test-results/
+playwright-report/
+
+# Local backup files
+*.bak
 
 # OS / editor
 .DS_Store

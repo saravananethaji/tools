@@ -284,11 +284,25 @@ class ProjectClassifier:
     """Classify Maven projects into types based on POM structure."""
 
     @classmethod
-    def classify(cls, pom: PomInfo, all_poms: List[PomInfo]) -> Tuple[str, str]:
+    def classify(cls, pom: PomInfo, all_poms: List[PomInfo],
+                 _memo: Optional[Dict[str, Tuple[str, str]]] = None,
+                 _visiting: Optional[Set[str]] = None) -> Tuple[str, str]:
         """
         Classify a POM into a project type.
         Returns (type, reason).
         """
+        if _memo is None:
+            _memo = {}
+        if _visiting is None:
+            _visiting = set()
+
+        if pom.path in _memo:
+            return _memo[pom.path]
+        if pom.path in _visiting:
+            return "Other Module", "cycle detected"
+
+        _visiting.add(pom.path)
+
         packaging = pom.packaging.lower()
         has_parent = pom.parent is not None
         has_modules = len(pom.modules) > 0
@@ -304,50 +318,60 @@ class ProjectClassifier:
         uses_package_gen = cls._uses_package_gen_plugin(pom)
 
         # Check parent type
-        parent_type = cls._get_parent_type(pom, all_poms)
+        parent_type = cls._get_parent_type(pom, all_poms, _memo, _visiting)
+
+        result: Tuple[str, str]
 
         # Classification logic
         if packaging == "pom" and has_dm and not has_modules:
             if is_bom_imported:
-                return "Service BOM", "packaging=pom + dependencyManagement + imported by others"
-            return "Internal Parent BOM", "packaging=pom + dependencyManagement + no modules"
+                result = ("Service BOM", "packaging=pom + dependencyManagement + imported by others")
+            else:
+                result = ("Internal Parent BOM", "packaging=pom + dependencyManagement + no modules")
 
-        if packaging == "pom" and has_modules and has_import_scope:
-            return "Service Framework", "packaging=pom + modules + imports BOM"
+        elif packaging == "pom" and has_modules and has_import_scope:
+            result = ("Service Framework", "packaging=pom + modules + imports BOM")
 
-        if packaging == "pom" and has_modules and parent_type == "Service Framework":
-            return "Service Project", "packaging=pom + parent=framework + modules"
+        elif packaging == "pom" and has_modules and parent_type == "Service Framework":
+            result = ("Service Project", "packaging=pom + parent=framework + modules")
 
-        if packaging in ("jar", "war") and parent_type == "Service Project":
-            return "Service Code", "packaging=jar/war + parent=service-project"
+        elif packaging in ("jar", "war") and parent_type == "Service Project":
+            result = ("Service Code", "packaging=jar/war + parent=service-project")
 
-        if packaging == "pom" and has_modules and uses_package_gen:
-            return "Service Packaging", "packaging=pom + modules + uses Package Gen plugin"
+        elif packaging == "pom" and has_modules and uses_package_gen:
+            result = ("Service Packaging", "packaging=pom + modules + uses Package Gen plugin")
 
-        if packaging in ("pom", "jar") and parent_type == "Service Packaging":
+        elif packaging in ("pom", "jar") and parent_type == "Service Packaging":
             if uses_package_gen:
-                return "Service Package", "parent=service-packaging + uses Package Gen"
-            return "Service Package", "parent=service-packaging"
+                result = ("Service Package", "parent=service-packaging + uses Package Gen")
+            else:
+                result = ("Service Package", "parent=service-packaging")
 
-        if packaging == "maven-plugin":
-            return "Package Gen", "packaging=maven-plugin"
+        elif packaging == "maven-plugin":
+            result = ("Package Gen", "packaging=maven-plugin")
 
-        if packaging == "jar" and parent_type in ("Internal Parent BOM", "Service BOM"):
+        elif packaging == "jar" and parent_type in ("Internal Parent BOM", "Service BOM"):
             # Count usage across services
-            usage_count = cls._count_usage(pom, all_poms)
+            usage_count = cls._count_usage(pom, all_poms, _memo, _visiting)
             if usage_count >= 3:
-                return "Common Component", f"parent=internal-bom + used by {usage_count} services"
-            return "Other Module", f"parent=internal-bom + used by {usage_count} services"
+                result = ("Common Component", f"parent=internal-bom + used by {usage_count} services")
+            else:
+                result = ("Other Module", f"parent=internal-bom + used by {usage_count} services")
 
         # Fallbacks
-        if packaging == "pom":
+        elif packaging == "pom":
             if has_modules:
-                return "Aggregator POM", "packaging=pom + modules"
-            if has_dm:
-                return "BOM", "packaging=pom + dependencyManagement"
-            return "Parent POM", "packaging=pom"
+                result = ("Aggregator POM", "packaging=pom + modules")
+            elif has_dm:
+                result = ("BOM", "packaging=pom + dependencyManagement")
+            else:
+                result = ("Parent POM", "packaging=pom")
+        else:
+            result = ("Library", f"packaging={packaging}")
 
-        return "Library", f"packaging={packaging}"
+        _visiting.remove(pom.path)
+        _memo[pom.path] = result
+        return result
 
     @classmethod
     def _is_bom_imported(cls, pom: PomInfo, all_poms: List[PomInfo]) -> bool:
@@ -370,22 +394,28 @@ class ProjectClassifier:
         return False
 
     @classmethod
-    def _get_parent_type(cls, pom: PomInfo, all_poms: List[PomInfo]) -> Optional[str]:
+    def _get_parent_type(cls, pom: PomInfo, all_poms: List[PomInfo],
+                         _memo: Optional[Dict[str, Tuple[str, str]]] = None,
+                         _visiting: Optional[Set[str]] = None) -> Optional[str]:
         """Get the classified type of the parent POM."""
         if not pom.parent:
             return None
         for other in all_poms:
             if other.ga == pom.parent.ga and other.version == pom.parent.version:
-                parent_type, _ = cls.classify(other, all_poms)
+                parent_type, _ = cls.classify(other, all_poms, _memo, _visiting)
                 return parent_type
         return None
 
     @classmethod
-    def _count_usage(cls, pom: PomInfo, all_poms: List[PomInfo]) -> int:
+    def _count_usage(cls, pom: PomInfo, all_poms: List[PomInfo],
+                     _memo: Optional[Dict[str, Tuple[str, str]]] = None,
+                     _visiting: Optional[Set[str]] = None) -> int:
         """Count how many Service Code modules depend on this artifact."""
         count = 0
         for other in all_poms:
-            other_type, _ = cls.classify(other, all_poms)
+            if other.path == pom.path:
+                continue
+            other_type, _ = cls.classify(other, all_poms, _memo, _visiting)
             if other_type == "Service Code":
                 for dep in other.dependencies:
                     if dep.ga == pom.ga:
@@ -409,27 +439,31 @@ def parse_maven_coordinate(coord_str: str) -> Dict[str, str]:
     cleaned = coord_str.strip().strip('"').strip("'")
     parts = cleaned.split(":")
 
-    def _id(g, a, v):
-        return f"{g}:{a}:{v}"
+    def _id(g, a, packaging, v, classifier=None):
+        parts = [g, a, packaging]
+        if classifier:
+            parts.append(classifier)
+        parts.append(v)
+        return ":".join(parts)
 
     if len(parts) == 5:
         g, a, _t, v, s = parts
-        return {"id": _id(g, a, v), "groupId": g, "artifactId": a,
+        return {"id": _id(g, a, _t, v), "groupId": g, "artifactId": a,
                 "packaging": _t, "version": v, "scope": s}
     if len(parts) == 6:
         g, a, _t, c, v, s = parts
-        return {"id": _id(g, a, v), "groupId": g, "artifactId": a,
+        return {"id": _id(g, a, _t, v, c), "groupId": g, "artifactId": a,
                 "packaging": _t, "classifier": c, "version": v, "scope": s}
     if len(parts) == 4:
         g, a, _t, v = parts
-        return {"id": _id(g, a, v), "groupId": g, "artifactId": a,
+        return {"id": _id(g, a, _t, v), "groupId": g, "artifactId": a,
                 "packaging": _t, "version": v, "scope": "compile"}
 
     # Fallback
     g = parts[0] if len(parts) > 0 else "unknown"
     a = parts[1] if len(parts) > 1 else cleaned
     v = parts[-1] if len(parts) > 2 else "unknown"
-    return {"id": _id(g, a, v), "groupId": g, "artifactId": a,
+    return {"id": _id(g, a, "jar", v), "groupId": g, "artifactId": a,
             "packaging": "jar", "version": v, "scope": "compile"}
 
 

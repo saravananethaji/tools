@@ -12,6 +12,7 @@ Routes:
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sys
@@ -74,9 +75,16 @@ def _validate_root_path(root: str) -> str:
             detail="Root directory path is required"
         )
     
-    # Normalize path (resolve .. and symlinks)
+    raw_path = root.strip()
+    if not os.path.isabs(raw_path):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Path must be absolute"
+        )
+
+    # Normalize path and resolve symlinks.
     try:
-        abs_path = os.path.abspath(os.path.normpath(root.strip()))
+        abs_path = str(Path(raw_path).resolve(strict=True))
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -96,11 +104,17 @@ def _validate_root_path(root: str) -> str:
             detail=f"Path is not a directory: {abs_path}"
         )
     
-    # Prevent directory traversal - ensure path is within allowed boundaries
-    if not os.path.isabs(abs_path):
+    configured_roots = os.environ.get("PROJECTGRAPH_ALLOWED_ROOTS")
+    allowed_roots = [
+        Path(p.strip()).resolve()
+        for p in (configured_roots.split(os.pathsep) if configured_roots else [BASE_DIR])
+        if p.strip()
+    ]
+    resolved = Path(abs_path)
+    if not any(resolved == allowed or resolved.is_relative_to(allowed) for allowed in allowed_roots):
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Path must be absolute"
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Path is outside PROJECTGRAPH_ALLOWED_ROOTS"
         )
     
     return abs_path
@@ -125,16 +139,19 @@ async def generic_exception_handler(request: Request, exc: Exception):
     )
 
 
-def _get_model():
+async def _get_model():
     if _state["model"] is None:
         root = _state["root"] or _default_root()
-        _state["model"] = build_model(root, CACHE_DIR)
+        _state["model"] = await run_in_threadpool(build_model, root, CACHE_DIR)
     return _state["model"]
 
 
 def _default_root() -> str:
-    # default: the ../test fixture shipped with the project
+    # default: local test_projects directory or ../test fixture
     here = os.path.dirname(os.path.abspath(__file__))
+    local_test = os.path.join(here, "test_projects")
+    if os.path.isdir(local_test):
+        return local_test
     return os.path.normpath(os.path.join(here, "..", "test"))
 
 
@@ -145,13 +162,13 @@ async def index():
 
 @app.get("/api/state")
 async def api_state():
-    model = _get_model()
+    model = await _get_model()
     return JSONResponse(model.to_dict())
 
 
 @app.get("/tree", response_class=HTMLResponse)
 async def tree_view(request: Request, q: str = ""):
-    model = _get_model()
+    model = await _get_model()
     return templates.TemplateResponse(request, "tree.html", {
         "modules": [m.to_dict() for m in model.modules],
         "query": q,
@@ -161,7 +178,7 @@ async def tree_view(request: Request, q: str = ""):
 
 @app.get("/conflicts", response_class=HTMLResponse)
 async def conflicts_view(request: Request):
-    model = _get_model()
+    model = await _get_model()
     conflicts = model.conflicts()
     return templates.TemplateResponse(request, "conflicts.html", {
         "conflicts": [
@@ -178,7 +195,7 @@ async def conflicts_view(request: Request):
 
 @app.get("/export", response_class=HTMLResponse)
 async def export_view(request: Request):
-    model = _get_model()
+    model = await _get_model()
     cypher = export_cypher(model)
     return templates.TemplateResponse(request, "export.html", {
         "cypher": cypher,
@@ -188,7 +205,7 @@ async def export_view(request: Request):
 
 @app.get("/export/download", response_class=PlainTextResponse)
 async def export_download():
-    model = _get_model()
+    model = await _get_model()
     cypher = export_cypher(model)
     return PlainTextResponse(
         cypher, media_type="application/octet-stream",
@@ -281,6 +298,8 @@ async def api_load_json(file: UploadFile = File(...)):
                 groupId=pom.groupId,
                 artifactId=pom.artifactId,
                 version=pom.version,
+                project_type=p.get("project_type", "Other Module"),
+                classification_reason=p.get("classification_reason", "not classified"),
             )
             
             # If DOT dependencies exist, build tree from them
@@ -297,11 +316,14 @@ async def api_load_json(file: UploadFile = File(...)):
                     node_meta[dst["id"]] = dst
                     adj.setdefault(src["id"], []).append(dst["id"])
                 
-                if module.coord_id in node_meta:
-                    built = {}
+                root_id = next((
+                    node_id for node_id, meta in node_meta.items()
+                    if meta["groupId"] == module.groupId
+                    and meta["artifactId"] == module.artifactId
+                    and meta["version"] == module.version
+                ), None)
+                if root_id:
                     def build(coord_id):
-                        if coord_id in built:
-                            return built[coord_id]
                         meta = node_meta[coord_id]
                         node = TreeNode(
                             coord_id=coord_id,
@@ -310,15 +332,22 @@ async def api_load_json(file: UploadFile = File(...)):
                             version=meta["version"],
                             scope=meta.get("scope", "compile"),
                             packaging=meta.get("packaging", "jar"),
+                            classifier=meta.get("classifier"),
                         )
-                        built[coord_id] = node
+                        return node
+
+                    def build_path(coord_id, ancestors):
+                        node = build(coord_id)
+                        if node.artifact_id in ancestors:
+                            return node
+                        next_ancestors = ancestors | {node.artifact_id}
                         for child_id in adj.get(coord_id, []):
-                            if child_id in built:
-                                continue
-                            node.children.append(build(child_id))
+                            child = build(child_id)
+                            if child.artifact_id not in next_ancestors:
+                                node.children.append(build_path(child_id, next_ancestors))
                         return node
                     
-                    module.tree = build(module.coord_id)
+                    module.tree = build_path(root_id, set())
             
             model.add_module(module)
             

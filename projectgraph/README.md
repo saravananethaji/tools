@@ -34,12 +34,15 @@ projectgraph/
 cd projectgraph
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+export PROJECTGRAPH_ALLOWED_ROOTS="/path/to/your/java/projects"
 python app.py
 # open http://127.0.0.1:8000
 ```
 
-By default it scans `../test` (the shipped Camel fixture). To point it at
-your own projects, POST the root:
+By default it scans the local `test_projects` fixtures. `/api/load` accepts only
+absolute directories under `PROJECTGRAPH_ALLOWED_ROOTS` (the application
+directory is the default). To point it at your own projects, set that variable
+before starting the server and POST the root:
 
 ```bash
 curl -d 'root=/path/to/your/java/projects' http://127.0.0.1:8000/api/load

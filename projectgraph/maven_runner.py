@@ -47,6 +47,7 @@ logger = logging.getLogger("projectgraph")
 # ----------------------------------------------------------------------
 
 _EDGE_RE = re.compile(r'"([^"]+)"\s*->\s*"([^"]+)"')
+_DIGRAPH_RE = re.compile(r'digraph\s*"([^"]+)"')
 
 
 def parse_dot_to_tree(dot_text: str, root_coord_id: str) -> Optional[TreeNode]:
@@ -59,6 +60,14 @@ def parse_dot_to_tree(dot_text: str, root_coord_id: str) -> Optional[TreeNode]:
     # build adjacency
     adj: Dict[str, List[str]] = {}
     node_meta: Dict[str, dict] = {}
+    root_graph_id = root_coord_id
+
+    dm = _DIGRAPH_RE.search(dot_text)
+    if dm:
+        root_parsed = parse_maven_coordinate(dm.group(1))
+        node_meta[root_parsed["id"]] = root_parsed
+        root_graph_id = root_parsed["id"]
+
     for line in dot_text.splitlines():
         m = _EDGE_RE.search(line)
         if not m:
@@ -70,14 +79,21 @@ def parse_dot_to_tree(dot_text: str, root_coord_id: str) -> Optional[TreeNode]:
         node_meta[dst["id"]] = dst
         adj.setdefault(src["id"], []).append(dst["id"])
 
-    if root_coord_id not in node_meta:
-        return None
-
-    built: Dict[str, TreeNode] = {}
+    if root_graph_id not in node_meta:
+        parts = root_coord_id.split(":")
+        if len(parts) >= 3:
+            node_meta[root_graph_id] = {
+                "id": root_graph_id,
+                "groupId": parts[0],
+                "artifactId": parts[1],
+                "version": parts[2],
+                "scope": "compile",
+                "packaging": "jar",
+            }
+        else:
+            return None
 
     def build(coord_id: str) -> TreeNode:
-        if coord_id in built:
-            return built[coord_id]
         meta = node_meta[coord_id]
         node = TreeNode(
             coord_id=coord_id,
@@ -86,16 +102,28 @@ def parse_dot_to_tree(dot_text: str, root_coord_id: str) -> Optional[TreeNode]:
             version=meta["version"],
             scope=meta.get("scope", "compile"),
             packaging=meta.get("packaging", "jar"),
+            classifier=meta.get("classifier"),
         )
-        built[coord_id] = node  # guard against cycles
-        for child_id in adj.get(coord_id, []):
-            # break cycles: skip back-edges to already-built ancestors
-            if child_id in built:
-                continue
-            node.children.append(build(child_id))
         return node
 
-    return build(root_coord_id)
+    def build_path(coord_id: str, ancestors: set[str]) -> TreeNode:
+        node = build(coord_id)
+        identity = node.artifact_id
+        if identity in ancestors:
+            return node
+        next_ancestors = ancestors | {identity}
+        for child_id in adj.get(coord_id, []):
+            child_meta = node_meta[child_id]
+            child_identity_parts = [child_meta["groupId"], child_meta["artifactId"], child_meta.get("packaging", "jar")]
+            if child_meta.get("classifier"):
+                child_identity_parts.append(child_meta["classifier"])
+            child_identity_parts.append(child_meta["version"])
+            if ":".join(child_identity_parts) in next_ancestors:
+                continue
+            node.children.append(build_path(child_id, next_ancestors))
+        return node
+
+    return build_path(root_graph_id, set())
 
 
 # ----------------------------------------------------------------------
@@ -111,10 +139,13 @@ def run_mvn_dependency_tree(pom_dir: str) -> Tuple[bool, str, str]:
     import shutil
     
     logger.info(f"  Running: mvn dependency:tree (in {pom_dir})")
-    dot_path = os.path.join(tempfile.gettempdir(), f"depgraph_{os.getpid()}_{abs(hash(pom_dir))}.dot")
-    # remove any stale dot file so mvn doesn't append/merge
-    if os.path.exists(dot_path):
+    with tempfile.NamedTemporaryFile(prefix="depgraph_", suffix=".dot", delete=False) as tmp:
+        dot_path = tmp.name
+    # remove any stale file so mvn creates it fresh
+    try:
         os.remove(dot_path)
+    except OSError:
+        pass
     cmd = ["mvn", "dependency:tree", "-DoutputType=dot",
            f"-DoutputFile={dot_path}", "-q"]
     
@@ -231,9 +262,11 @@ def build_model(root_dir: str, cache_dir: str,
 
         cached = None if force_reload else load_cache(cache_dir, pom.path)
 
+        project_type, classification_reason = project_types[pom.path]
         module = Module(
             pom_path=pom.path, dir_path=pom_dir,
             coord_id=pom.coord, groupId=pom.groupId, artifactId=pom.artifactId, version=pom.version,
+            project_type=project_type, classification_reason=classification_reason,
         )
 
         if cached and cached.get("mtime") == mtime:
@@ -258,7 +291,7 @@ def build_model(root_dir: str, cache_dir: str,
             else:
                 module.error = err
                 logger.error(f"  Maven error: {err}")
-            save_cache(cache_dir, pom_path, {
+            save_cache(cache_dir, pom.path, {
                 "mtime": mtime,
                 "tree": module.tree.to_dict() if module.tree else None,
                 "error": module.error,

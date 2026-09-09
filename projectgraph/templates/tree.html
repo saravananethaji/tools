@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Dependency Hierarchy · Maven Graph{% endblock %}
+{% block title %}Dependency Hierarchy Maven Graph{% endblock %}
 {% block content %}
 <div class="toolbar">
   <input type="text" id="search" placeholder="Search modules/dependencies (groupId / artifactId / version)…" value="{{ query }}" autocomplete="off">
@@ -18,6 +18,7 @@
       <span class="caret">▶</span>
       <span class="module-title">{{ m.display }}
         <span class="version-pill">{{ m.version }}</span>
+        <span class="scope-pill">{{ m.project_type }}</span>
         {% if m.error %}<span class="scope-pill err">error</span>{% endif %}
       </span>
       <span class="small" style="margin-left:auto">{{ m.pom_path }}</span>
@@ -25,7 +26,7 @@
     {% if m.error %}
       <div class="err-box"><b>mvn error:</b> {{ m.error }}</div>
     {% else %}
-      <div class="tree-body" style="display:none; padding-top:.5rem;">
+      <div class="tree-body hidden" style="display:none; padding-top:.5rem;">
         <ul class="tree root" id="tree-{{ loop.index0 }}"></ul>
       </div>
     {% endif %}
@@ -36,18 +37,39 @@
 <script>
 const MODULES = {{ modules | tojson }};
 
+// Track artifact usage across modules (for detecting duplicate JARs / version discrepancies)
+const artifactUsage = {};
+MODULES.forEach(m => {
+  function walk(node) {
+    if (!node.artifactId) return;
+    const ga = (node.groupId ? node.groupId + ':' : '') + node.artifactId;
+    if (!artifactUsage[ga]) artifactUsage[ga] = new Set();
+    artifactUsage[ga].add(node.coord_id);
+    if (node.children) node.children.forEach(walk);
+  }
+  if (m.tree) walk(m.tree);
+});
+
+// Find artifacts that have multiple distinct versions across modules
+const duplicateArtifacts = {};
+Object.keys(artifactUsage).forEach(ga => {
+  if (artifactUsage[ga].size > 1) {
+    duplicateArtifacts[ga] = [...artifactUsage[ga]];
+  }
+});
+
 // Render a tree node with full hierarchy info
-function renderTree(container, node, query, level = 0) {
+function renderTree(container, node, query, level = 0, pathHistory = []) {
   const li = document.createElement('li');
   li.className = 'node';
-  
+
   // Build row with indentation showing hierarchy depth
   const indent = level * 18;
   const row = document.createElement('div');
   row.className = 'row';
   row.style.paddingLeft = indent + 'px';
   row.style.borderLeft = '1px solid #e0e0e0';
-  
+
   const name = document.createElement('span');
   name.className = 'name';
   name.textContent = node.groupId + ':' + node.artifactId + ':' + node.version;
@@ -106,6 +128,25 @@ function renderTree(container, node, query, level = 0) {
     scope.appendChild(conflictBadge);
   }
   
+  // DUPLICATE JAR DETECTION (different versions across modules)
+  const ga = (node.groupId ? node.groupId + ':' : '') + node.artifactId;
+  if (node.artifactId && duplicateArtifacts[ga]) {
+    const dupBadge = document.createElement('span');
+    dupBadge.className = 'scope-pill dup-badge';
+    dupBadge.title = 'Multiple versions of this artifact used across modules';
+    dupBadge.innerHTML = '🔄';
+    scope.appendChild(dupBadge);
+  }
+
+  // Circular dependency marker
+  if (node.cycle) {
+    const cycleBadge = document.createElement('span');
+    cycleBadge.className = 'scope-pill err';
+    cycleBadge.title = 'Circular dependency detected (omitted to prevent recursion)';
+    cycleBadge.textContent = '↺ cycle';
+    scope.appendChild(cycleBadge);
+  }
+
   row.append(name, ver, scope);
 
   // search match / dim
@@ -136,8 +177,9 @@ function renderTree(container, node, query, level = 0) {
 function toggleModule(head) {
   const body = head.nextElementSibling;
   if (!body) return;
-  const open = body.style.display !== 'none';
+  const open = body.style.display !== 'none' && !body.classList.contains('hidden');
   body.style.display = open ? 'none' : '';
+  body.classList.toggle('hidden', open);
   head.querySelector('.caret').textContent = open ? '▶' : '▼';
   if (!open && body.id === '') {
     // already rendered - just ensure it's visible
@@ -149,6 +191,7 @@ function toggleAll(expanded) {
   const bodies = document.querySelectorAll('.tree-body');
   bodies.forEach(body => {
     body.style.display = expanded ? '' : 'none';
+    body.classList.toggle('hidden', !expanded);
   });
   const carets = document.querySelectorAll('.caret');
   carets.forEach(caret => {

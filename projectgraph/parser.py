@@ -1,6 +1,10 @@
 import re
 from typing import Dict, List, Optional, Tuple
-from neo4j import GraphDatabase
+
+try:
+    from neo4j import GraphDatabase
+except ImportError:
+    GraphDatabase = None
 
 # =====================================================================
 # 1. MAVEN COORDINATE PARSER
@@ -97,6 +101,8 @@ def parse_dot_file(filepath: str) -> Tuple[List[Dict], List[Dict]]:
 
 class MavenGraphIngester:
     def __init__(self, uri: str = "bolt://localhost:7687", auth: Optional[Tuple[str, str]] = None):
+        if GraphDatabase is None:
+            raise ImportError("neo4j package is required to use MavenGraphIngester. Install with: pip install neo4j")
         auth_token = auth if auth else ("neo4j", "")
         self.driver = GraphDatabase.driver(uri, auth=auth_token)
 

@@ -315,11 +315,25 @@ class ProjectClassifier:
     }
 
     @classmethod
-    def classify(cls, pom: PomInfo, all_poms: List[PomInfo]) -> Tuple[str, str]:
+    def classify(cls, pom: PomInfo, all_poms: List[PomInfo],
+                 _memo: Optional[Dict[str, Tuple[str, str]]] = None,
+                 _visiting: Optional[Set[str]] = None) -> Tuple[str, str]:
         """
         Classify a POM into a project type.
         Returns (type, reason).
         """
+        if _memo is None:
+            _memo = {}
+        if _visiting is None:
+            _visiting = set()
+
+        if pom.path in _memo:
+            return _memo[pom.path]
+        if pom.path in _visiting:
+            return "Other Module", "cycle detected"
+
+        _visiting.add(pom.path)
+
         packaging = pom.packaging.lower()
         has_parent = pom.parent is not None
         has_modules = len(pom.modules) > 0
@@ -335,50 +349,60 @@ class ProjectClassifier:
         uses_package_gen = cls._uses_package_gen_plugin(pom)
 
         # Check parent type
-        parent_type = cls._get_parent_type(pom, all_poms)
+        parent_type = cls._get_parent_type(pom, all_poms, _memo, _visiting)
+
+        result: Tuple[str, str]
 
         # Classification logic
         if packaging == "pom" and has_dm and not has_modules:
             if is_bom_imported:
-                return "Service BOM", "packaging=pom + dependencyManagement + imported by others"
-            return "Internal Parent BOM", "packaging=pom + dependencyManagement + no modules"
+                result = ("Service BOM", "packaging=pom + dependencyManagement + imported by others")
+            else:
+                result = ("Internal Parent BOM", "packaging=pom + dependencyManagement + no modules")
 
-        if packaging == "pom" and has_modules and has_import_scope:
-            return "Service Framework", "packaging=pom + modules + imports BOM"
+        elif packaging == "pom" and has_modules and has_import_scope:
+            result = ("Service Framework", "packaging=pom + modules + imports BOM")
 
-        if packaging == "pom" and has_modules and parent_type == "Service Framework":
-            return "Service Project", "packaging=pom + parent=framework + modules"
+        elif packaging == "pom" and has_modules and parent_type == "Service Framework":
+            result = ("Service Project", "packaging=pom + parent=framework + modules")
 
-        if packaging in ("jar", "war") and parent_type == "Service Project":
-            return "Service Code", "packaging=jar/war + parent=service-project"
+        elif packaging in ("jar", "war") and parent_type == "Service Project":
+            result = ("Service Code", "packaging=jar/war + parent=service-project")
 
-        if packaging == "pom" and has_modules and uses_package_gen:
-            return "Service Packaging", "packaging=pom + modules + uses Package Gen plugin"
+        elif packaging == "pom" and has_modules and uses_package_gen:
+            result = ("Service Packaging", "packaging=pom + modules + uses Package Gen plugin")
 
-        if packaging in ("pom", "jar") and parent_type == "Service Packaging":
+        elif packaging in ("pom", "jar") and parent_type == "Service Packaging":
             if uses_package_gen:
-                return "Service Package", "parent=service-packaging + uses Package Gen"
-            return "Service Package", "parent=service-packaging"
+                result = ("Service Package", "parent=service-packaging + uses Package Gen")
+            else:
+                result = ("Service Package", "parent=service-packaging")
 
-        if packaging == "maven-plugin":
-            return "Package Gen", "packaging=maven-plugin"
+        elif packaging == "maven-plugin":
+            result = ("Package Gen", "packaging=maven-plugin")
 
-        if packaging == "jar" and parent_type in ("Internal Parent BOM", "Service BOM"):
+        elif packaging == "jar" and parent_type in ("Internal Parent BOM", "Service BOM"):
             # Count usage across services
-            usage_count = cls._count_usage(pom, all_poms)
+            usage_count = cls._count_usage(pom, all_poms, _memo, _visiting)
             if usage_count >= 3:
-                return "Common Component", f"parent=internal-bom + used by {usage_count} services"
-            return "Other Module", f"parent=internal-bom + used by {usage_count} services"
+                result = ("Common Component", f"parent=internal-bom + used by {usage_count} services")
+            else:
+                result = ("Other Module", f"parent=internal-bom + used by {usage_count} services")
 
         # Fallbacks
-        if packaging == "pom":
+        elif packaging == "pom":
             if has_modules:
-                return "Aggregator POM", "packaging=pom + modules"
-            if has_dm:
-                return "BOM", "packaging=pom + dependencyManagement"
-            return "Parent POM", "packaging=pom"
+                result = ("Aggregator POM", "packaging=pom + modules")
+            elif has_dm:
+                result = ("BOM", "packaging=pom + dependencyManagement")
+            else:
+                result = ("Parent POM", "packaging=pom")
+        else:
+            result = ("Library", f"packaging={packaging}")
 
-        return "Library", f"packaging={packaging}"
+        _visiting.remove(pom.path)
+        _memo[pom.path] = result
+        return result
 
     @classmethod
     def _is_bom_imported(cls, pom: PomInfo, all_poms: List[PomInfo]) -> bool:
@@ -401,22 +425,28 @@ class ProjectClassifier:
         return False
 
     @classmethod
-    def _get_parent_type(cls, pom: PomInfo, all_poms: List[PomInfo]) -> Optional[str]:
+    def _get_parent_type(cls, pom: PomInfo, all_poms: List[PomInfo],
+                         _memo: Optional[Dict[str, Tuple[str, str]]] = None,
+                         _visiting: Optional[Set[str]] = None) -> Optional[str]:
         """Get the classified type of the parent POM."""
         if not pom.parent:
             return None
         for other in all_poms:
             if other.ga == pom.parent.ga and other.version == pom.parent.version:
-                parent_type, _ = cls.classify(other, all_poms)
+                parent_type, _ = cls.classify(other, all_poms, _memo, _visiting)
                 return parent_type
         return None
 
     @classmethod
-    def _count_usage(cls, pom: PomInfo, all_poms: List[PomInfo]) -> int:
+    def _count_usage(cls, pom: PomInfo, all_poms: List[PomInfo],
+                     _memo: Optional[Dict[str, Tuple[str, str]]] = None,
+                     _visiting: Optional[Set[str]] = None) -> int:
         """Count how many Service Code modules depend on this artifact."""
         count = 0
         for other in all_poms:
-            other_type, _ = cls.classify(other, all_poms)
+            if other.path == pom.path:
+                continue
+            other_type, _ = cls.classify(other, all_poms, _memo, _visiting)
             if other_type == "Service Code":
                 for dep in other.dependencies:
                     if dep.ga == pom.ga:
@@ -504,11 +534,11 @@ class MavenScanner:
 
     def _find_poms_and_dots(self):
         """Walk directory tree, find pom.xml and .dot files.
-        
+
         For Maven projects (directories containing pom.xml), skip their
         src/, target/, and test/ subdirectories during traversal. Also skip
         common non-source directories globally.
-        
+
         IMPORTANT: This handles NESTED Maven projects correctly:
         - A directory with pom.xml will have its src/target/test skipped
         - But subdirectories WITH their own pom.xml are still traversed
@@ -881,6 +911,10 @@ class JSONExporter:
         return {
             "path": p.path,
             "directory": p.directory,
+            "coord_id": p.coord,
+            "groupId": p.groupId,
+            "artifactId": p.artifactId,
+            "version": p.version,
             "coordinates": {
                 "groupId": p.groupId,
                 "artifactId": p.artifactId,
@@ -900,16 +934,21 @@ class JSONExporter:
             "modules": p.modules,
             "dependencies": [
                 {
+                    "coord_id": d.coord,
+                    "ga": d.ga,
                     "groupId": d.groupId,
                     "artifactId": d.artifactId,
                     "version": d.version,
                     "scope": d.scope,
                     "type": d.type,
+                    "is_direct": True,
                 }
                 for d in p.dependencies
             ],
             "dependency_management": [
                 {
+                    "coord_id": d.coord,
+                    "ga": d.ga,
                     "groupId": d.groupId,
                     "artifactId": d.artifactId,
                     "version": d.version,
@@ -969,6 +1008,12 @@ Examples:
         action="store_true",
         help="Verbose logging"
     )
+    parser.add_argument(
+        "--analyze-vulnerability",
+        nargs=2,
+        metavar=("GROUPID:ARTIFACT", "VERSION"),
+        help="Analyze a vulnerable artifact: groupId:artifactId and version"
+    )
     args = parser.parse_args()
 
     root_dir = args.root_dir
@@ -1007,6 +1052,185 @@ Examples:
     type_counts = Counter(a.project_type for a in analyses)
     for t, c in sorted(type_counts.items()):
         print(f"    {t}: {c}")
+
+    if args.analyze_vulnerability:
+        target_ga, target_ver = args.analyze_vulnerability
+        print()
+        vuln_res = analyze_vulnerability(analyses, target_ga, target_ver)
+        print(vuln_res["recommendation"])
+
+# ----------------------------------------------------------------------
+# Vulnerability Analysis
+# ----------------------------------------------------------------------
+
+def analyze_vulnerability(analyses, target_ga, target_version):
+    """
+    Analyze a vulnerable Maven artifact and recommend minimal impact fix.
+
+    Args:
+        analyses: List of ProjectAnalysis objects
+        target_ga: groupId:artifactId of the vulnerable jar
+        target_version: The vulnerable version
+
+    Returns:
+        Dictionary with analysis results and recommended fix
+    """
+    # Collect all occurrences of the vulnerable artifact
+    occurrences = []  # list of {module_coord, version, scope, is_direct, path}
+    direct_bringers = set()  # module coords that directly declare it
+
+    for a in analyses:
+        module_coord = a.pom.coord
+
+        # Check direct dependencies
+        for dep in a.pom.dependencies:
+            if dep.ga == target_ga:
+                occurrences.append({
+                    'module_coord': module_coord,
+                    'version': dep.version or 'UNKNOWN',
+                    'scope': dep.scope or 'compile',
+                    'is_direct': True,
+                    'path': f"Direct dependency in {module_coord}"
+                })
+                if dep.version == target_version:
+                    direct_bringers.add(module_coord)
+
+        # Check dependencyManagement (BOM-controlled)
+        for dep in a.pom.dependency_management:
+            if dep.ga == target_ga:
+                occurrences.append({
+                    'module_coord': module_coord,
+                    'version': dep.version or 'UNKNOWN',
+                    'scope': dep.scope or 'import',
+                    'is_direct': False,
+                    'path': f"BOM import in {module_coord}"
+                })
+
+    # Determine the analysis
+    total_occurrences = len(occurrences)
+    direct_occurrences = sum(1 for o in occurrences if o['is_direct'])
+    transitive_occurrences = total_occurrences - direct_occurrences
+
+    # Find alternative versions (if any)
+    alternative_versions = set()
+    for o in occurrences:
+        if o['version'] and o['version'] != target_version:
+            alternative_versions.add(o['version'])
+
+    # Determine recommendation
+    recommendation_parts = [f"VULNERABILITY ANALYSIS RESULTS"]
+    recommendation_parts.append(f"Target: {target_ga}:{target_version}")
+    recommendation_parts.append(f"Total occurrences: {total_occurrences}")
+    recommendation_parts.append(f"  - Direct dependencies: {direct_occurrences}")
+    recommendation_parts.append(f"  - Transitive dependencies: {transitive_occurrences}")
+    if alternative_versions:
+        recommendation_parts.append(f"Alternative versions found: {', '.join(sorted(alternative_versions))}")
+    else:
+        recommendation_parts.append("No alternative versions detected in the project")
+
+    recommendation_parts.append("")
+    recommendation_parts.append("RECOMMENDATION: Minimal Impact Change")
+
+    if direct_bringers:
+        recommendation_parts.append("")
+        recommendation_parts.append("Option 1 - Upgrade direct dependency:")
+        recommendation_parts.append(f"  The vulnerable jar is brought in by direct dependency/ies: {', '.join(sorted(direct_bringers))}")
+        recommendation_parts.append("  Suggested action: Upgrade the direct dependency to a version that excludes this vulnerability or contains the fix.")
+        recommendation_parts.append("")
+        recommendation_parts.append("Option 2 - BOM exclusion:")
+        recommendation_parts.append("  If using a BOM, add the vulnerable artifact to the exclusion list:")
+        recommendation_parts.append("  <dependencyManagement>")
+        recommendation_parts.append("    <dependencies>")
+        rec_ga = target_ga.split(':')
+        rec_gaid = rec_ga[1] if len(rec_ga) > 1 else 'artifact'
+        rec_ga_ver = target_version if target_version else 'LATEST'
+        recommendation_parts.append(f"        <groupId>{rec_ga[0]}</groupId>")
+        recommendation_parts.append(f"        <artifactId>{rec_gaid}</artifactId>")
+        recommendation_parts.append(f"        <version>{rec_ga_ver}</version>")
+        recommendation_parts.append("        <scope>compile</scope>")
+        recommendation_parts.append("      </dependency>")
+        recommendation_parts.append("    </dependencies>")
+        recommendation_parts.append("  </dependencyManagement>")
+    else:
+        recommendation_parts.append("")
+        recommendation_parts.append("The vulnerable jar only appears as a transitive dependency. Recommended approach:")
+        recommendation_parts.append("1. Upgrade the direct parent dependency version that brings it in")
+        recommendation_parts.append("2. Or explicitly declare the jar as a direct dependency with a fixed version under BOM")
+
+    recommendation_parts.append("")
+    recommendation = "\n".join(recommendation_parts)
+
+    return {
+        'target': f"{target_ga}:{target_version}",
+        'total_occurrences': total_occurrences,
+        'direct_occurrences': direct_occurrences,
+        'transitive_occurrences': transitive_occurrences,
+        'alternative_versions': sorted(alternative_versions),
+        'direct_bringers': sorted(direct_bringers),
+        'recommendation': recommendation
+    }
+
+
+def _trace_parent_chain(analyses, module_coord, max_depth=5):
+    """
+    Trace the parent POM chain for a module.
+
+    Args:
+        analyses: List of ProjectAnalysis objects
+        module_coord: The coord_id of the module to trace from
+        max_depth: Maximum depth to trace (prevents infinite loops)
+
+    Returns:
+        List of dicts with 'parent_coord', 'parent_version', 'pom_path' from child to root
+    """
+    chain = []
+
+    # Find the module in analyses
+    target_module = None
+    for a in analyses:
+        if a.pom.coord == module_coord:
+            target_module = a
+            break
+
+    if target_module is None:
+        return chain
+
+    # Start tracing from this module
+    current_coord = module_coord
+    current_depth = 0
+
+    while current_depth < max_depth:
+        # Find the module in analyses to get its parent
+        module_info = None
+        for a in analyses:
+            if a.pom.coord == current_coord:
+                module_info = a
+                break
+
+        if module_info is None or module_info.pom.parent is None:
+            break
+
+        parent_info = module_info.pom.parent
+        parent_coord = f"{parent_info.groupId}:{parent_info.artifactId}:{parent_info.version}"
+        parent_pom_path = module_info.pom.path if module_info.pom.path else ""
+
+        # Add to chain
+        chain.append({
+            'parent_coord': parent_coord,
+            'parent_version': parent_info.version,
+            'pom_path': parent_pom_path,
+            'relative_path': parent_info.relativePath
+        })
+
+        # Move to the parent for next iteration
+        current_coord = parent_coord
+        current_depth += 1
+
+        # Stop if we've reached the root or cycle
+        if current_depth >= max_depth:
+            break
+
+    return chain
 
 
 if __name__ == "__main__":
