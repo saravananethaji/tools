@@ -159,6 +159,24 @@ class BlastRadiusTests(unittest.TestCase):
         self.assertEqual(0, report["affected_module_count"])
         self.assertIn("module roots", report["note"])
 
+    def test_internal_module_root_is_still_a_dependency_in_other_module(self):
+        """A coordinate can be a root in one module and a dependency in another."""
+        model = GraphModel(root="/repo")
+        model.add_module(module("com.acme:common:1",
+                                'digraph "com.acme:common:jar:1" {\n}\n',
+                                analysis_status="empty", completeness="complete"))
+        model.add_module(module(
+            "com.acme:app:1",
+            'digraph "com.acme:app:jar:1" {\n'
+            '"com.acme:app:jar:1" -> "com.acme:common:jar:1:compile"\n'
+            '}\n',
+            analysis_status="resolved", completeness="complete"))
+        report = blast_radius(model, "com.acme:common:1")
+        self.assertEqual(1, report["affected_module_count"])
+        self.assertEqual("com.acme:app:1", report["modules"][0]["module"])
+        self.assertTrue(report["matches"][0]["module_root"])
+        self.assertTrue(report["matches"][0]["dependency"])
+
     def test_ambiguous_query_lists_every_match(self):
         model = GraphModel(root="/repo")
         for name, version in (("one", "1"), ("two", "2")):
@@ -235,6 +253,20 @@ class BlastRadiusTests(unittest.TestCase):
         self.assertTrue(report["truncated"])
         self.assertIn("configured bound", report["note"])
 
+    def test_directness_survives_path_truncation(self):
+        dot = (
+            'digraph "g:app:jar:1" {\n'
+            '"g:app:jar:1" -> "x:first:jar:1:compile"\n'
+            '"g:app:jar:1" -> "x:second:jar:1:compile"\n'
+            '"g:app:jar:1" -> "t:target:jar:1:compile"\n'
+            '"x:first:jar:1:compile" -> "t:target:jar:1:compile"\n'
+            '"x:second:jar:1:compile" -> "t:target:jar:1:compile"\n'
+            '}\n'
+        )
+        report = blast_radius(one_module(dot), "t:target:1", max_paths=2)
+        self.assertEqual("direct", report["modules"][0]["relationship"])
+        self.assertTrue(report["modules"][0]["paths_truncated"])
+
     def test_cycle_terminates(self):
         dot = (
             'digraph "g:app:jar:1" {\n'
@@ -263,6 +295,19 @@ class BlastRadiusTests(unittest.TestCase):
             {m["coord_id"]: m["reason"] for m in report["excluded_modules"]})
         # The resolved modules are still fully reported.
         self.assertEqual(2, report["affected_module_count"])
+
+    def test_static_tree_is_excluded_from_resolved_impact(self):
+        model = GraphModel(root="/repo", source="pom-static",
+                           completeness="partial")
+        model.add_module(module("com.acme:app:1", APP_DOT,
+                                source="pom-static",
+                                analysis_status="partial_static",
+                                completeness="partial"))
+        report = blast_radius(model, "vuln.lib:core:1")
+        self.assertEqual([], report["matches"])
+        self.assertEqual(0, report["affected_module_count"])
+        self.assertEqual("partial", report["completeness"])
+        self.assertIn("not Maven-resolved", report["excluded_modules"][0]["reason"])
 
     def test_affected_modules_helper_is_compact(self):
         rows = affected_modules(model_with_app_and_other(), "vuln.lib:core:1")

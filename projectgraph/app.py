@@ -33,7 +33,14 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from maven_runner import build_model
-from graph_model import GraphModel, Module, TreeNode, SCAN_SCHEMA_VERSION
+from graph_model import (
+    GraphModel,
+    Module,
+    TreeNode,
+    SCAN_SCHEMA_VERSION,
+    has_maven_resolved_tree,
+    resolved_tree_exclusion_reason,
+)
 from neo4j_export import export_cypher
 from pom_parser import parse_pom, PomInfo, Dependency, Plugin, ParentInfo
 from oss_inventory import build_inventory
@@ -271,8 +278,8 @@ async def conflicts_view(request: Request):
     model = await _get_model()
     conflicts = model.conflicts()
     unresolved = [
-        {"coord_id": m.coord_id, "reason": m.error or m.analysis_status}
-        for m in model.modules if not m.tree
+        {"coord_id": m.coord_id, "reason": resolved_tree_exclusion_reason(m)}
+        for m in model.modules if not has_maven_resolved_tree(m)
     ]
     return templates.TemplateResponse(request, "conflicts.html", {
         "conflicts": [

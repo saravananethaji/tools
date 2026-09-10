@@ -135,6 +135,40 @@ class OssInventoryTests(unittest.TestCase):
         self.assertEqual(2, len(consumer["paths"]))
         self.assertTrue(consumer["paths_truncated"])
 
+    def test_directness_survives_path_truncation(self):
+        """A later direct edge must not be hidden by retained indirect paths."""
+        dot = (
+            'digraph "g:app:jar:1" {\n'
+            '"g:app:jar:1" -> "x:first:jar:1:compile"\n'
+            '"g:app:jar:1" -> "x:second:jar:1:compile"\n'
+            '"g:app:jar:1" -> "t:target:jar:1:compile"\n'
+            '"x:first:jar:1:compile" -> "t:target:jar:1:compile"\n'
+            '"x:second:jar:1:compile" -> "t:target:jar:1:compile"\n'
+            '}\n'
+        )
+        model = GraphModel(root="/repo")
+        model.add_module(module("g:app:1", dot,
+                                analysis_status="resolved",
+                                completeness="complete"))
+        entry = next(e for e in build_inventory(model, max_paths=2)["entries"]
+                     if e["canonical_id"] == "t:target:jar:1")
+        consumer = entry["consumers"][0]
+        self.assertEqual("direct", consumer["relationship"])
+        self.assertTrue(consumer["paths_truncated"])
+
+    def test_static_tree_is_excluded_from_resolved_inventory(self):
+        model = GraphModel(root="/repo", source="pom-static",
+                           completeness="partial")
+        model.add_module(module("com.acme:app:1", APP_DOT,
+                                source="pom-static",
+                                analysis_status="partial_static",
+                                completeness="partial"))
+        inventory = build_inventory(model)
+        self.assertEqual([], inventory["entries"])
+        self.assertEqual([], inventory["included_modules"])
+        self.assertEqual("partial", inventory["completeness"])
+        self.assertIn("not Maven-resolved", inventory["excluded_modules"][0]["reason"])
+
     def test_unresolved_module_is_reported_not_dropped(self):
         inventory = build_inventory(self._model())
         self.assertEqual("partial", inventory["completeness"])

@@ -33,7 +33,13 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional, Set, Tuple
 
-from graph_model import GraphModel, Module, TreeNode
+from graph_model import (
+    GraphModel,
+    Module,
+    TreeNode,
+    has_maven_resolved_tree,
+    resolved_tree_exclusion_reason,
+)
 
 DEFAULT_MAX_PATHS = 16
 MAX_ALLOWED_PATHS = 100
@@ -113,14 +119,17 @@ def index_artifacts(model: GraphModel) -> Dict[str, dict]:
     coordinates (which are legitimate route origins and query subjects)."""
     index: Dict[str, dict] = {}
     for module in model.modules:
-        if module.tree is not None:
-            index.setdefault(module.tree.artifact_id, {
+        if has_maven_resolved_tree(module):
+            root_meta = index.setdefault(module.tree.artifact_id, {
                 **_artifact_meta(module.tree),
                 "module_root": True,
+                "dependency": False,
                 "modules": [],
-            })["modules"].append(module.coord_id)
+            })
+            root_meta["module_root"] = True
+            root_meta["modules"].append(module.coord_id)
     for module in model.modules:
-        if module.tree is None:
+        if not has_maven_resolved_tree(module):
             continue
         stack = list(module.tree.children)
         while stack:
@@ -129,8 +138,11 @@ def index_artifacts(model: GraphModel) -> Dict[str, dict]:
                 index[node.artifact_id] = {
                     **_artifact_meta(node),
                     "module_root": False,
+                    "dependency": True,
                     "modules": [],
                 }
+            else:
+                index[node.artifact_id]["dependency"] = True
             index[node.artifact_id]["modules"].append(module.coord_id)
             stack.extend(node.children)
     for meta in index.values():
@@ -264,8 +276,8 @@ def _routes_between(module: Module, from_ids: Set[str], to_ids: Set[str],
 
 def _module_errors(model: GraphModel) -> List[dict]:
     return [
-        {"coord_id": m.coord_id, "reason": m.error or m.analysis_status}
-        for m in model.modules if m.tree is None
+        {"coord_id": m.coord_id, "reason": resolved_tree_exclusion_reason(m)}
+        for m in model.modules if not has_maven_resolved_tree(m)
     ]
 
 
@@ -308,26 +320,20 @@ def blast_radius(model: GraphModel, coordinate: str,
         )
         return result
 
-    target_ids = {m["canonical_id"] for m in matches}
-    root_ids = {m["canonical_id"] for m in matches if m.get("module_root")}
-    dependency_targets = target_ids - root_ids
-
-    if not dependency_targets:
-        result["note"] = (
-            "The coordinate matches only scanned module roots, which are "
-            "project context rather than dependencies; no module is affected."
-        )
-        return result
+    dependency_targets = {m["canonical_id"] for m in matches}
 
     budget = _Budget(node_budget)
     for module in model.modules:
-        if module.tree is None:
+        if not has_maven_resolved_tree(module):
             continue
         paths, truncated = _paths_to_targets(module, dependency_targets,
                                              limit, budget)
         if not paths:
             continue
-        direct = any(len(p) == 2 for p in paths)
+        # Do not infer directness from a bounded path sample. A direct edge can
+        # occur after retained transitive paths in traversal order.
+        direct = any(child.artifact_id in dependency_targets
+                     for child in module.tree.children)
         introducers = sorted({p[-2].artifact_id for p in paths
                               if len(p) > 2})
         scopes = sorted({p[-1].scope for p in paths})
@@ -361,7 +367,13 @@ def blast_radius(model: GraphModel, coordinate: str,
             "routes may be omitted."
         )
     elif not result["modules"]:
-        result["note"] = "No resolved module depends on this coordinate."
+        if all(not m.get("dependency", False) for m in matches):
+            result["note"] = (
+                "The coordinate matches only scanned module roots, which are "
+                "project context rather than dependencies; no module is affected."
+            )
+        else:
+            result["note"] = "No resolved module depends on this coordinate."
     return result
 
 
@@ -406,7 +418,7 @@ def dependency_routes(model: GraphModel, from_coordinate: str,
 
     budget = _Budget(node_budget)
     for module in model.modules:
-        if module.tree is None:
+        if not has_maven_resolved_tree(module):
             continue
         routes, truncated = _routes_between(module, from_ids, to_ids, limit,
                                             budget)

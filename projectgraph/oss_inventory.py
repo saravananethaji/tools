@@ -26,7 +26,13 @@ from __future__ import annotations
 import os
 from typing import Dict, List, Optional, Set
 
-from graph_model import GraphModel, Module, TreeNode
+from graph_model import (
+    GraphModel,
+    Module,
+    TreeNode,
+    has_maven_resolved_tree,
+    resolved_tree_exclusion_reason,
+)
 
 DEFAULT_MAX_PATHS = 8
 
@@ -59,12 +65,13 @@ def _purl(node: TreeNode) -> str:
 
 
 class _Consumer:
-    __slots__ = ("scopes", "paths", "seen_paths")
+    __slots__ = ("scopes", "paths", "seen_paths", "direct")
 
     def __init__(self) -> None:
         self.scopes: Set[str] = set()
         self.paths: List[List[str]] = []
         self.seen_paths = 0
+        self.direct = False
 
     @property
     def truncated(self) -> bool:
@@ -105,8 +112,8 @@ def build_inventory(model: GraphModel,
     included: List[str] = []
     excluded: List[dict] = []
     for module in model.modules:
-        if module.tree is None:
-            reason = module.error or f"analysis_status={module.analysis_status}"
+        reason = resolved_tree_exclusion_reason(module)
+        if reason:
             excluded.append({"coord_id": module.coord_id, "reason": reason})
             continue
         included.append(module.coord_id)
@@ -142,6 +149,8 @@ def build_inventory(model: GraphModel,
             module.coord_id, _Consumer())
         consumer.scopes.add(node.scope)
         full_path = path + [node.artifact_id]
+        if len(full_path) == 2:
+            consumer.direct = True
         consumer.seen_paths += 1
         if len(consumer.paths) < max_paths:
             consumer.paths.append(full_path)
@@ -149,7 +158,7 @@ def build_inventory(model: GraphModel,
             record(child, module, full_path, on_path)
 
     for module in model.modules:
-        if module.tree is None:
+        if not has_maven_resolved_tree(module):
             continue
         # The module's own root is context, not a resolved dependency.
         for child in module.tree.children:
@@ -164,11 +173,10 @@ def build_inventory(model: GraphModel,
         consumers = []
         for module_id in sorted(entry["consumers"]):
             c = entry["consumers"][module_id]
-            direct = any(len(p) == 2 for p in c.paths)
             consumers.append({
                 "module": module_id,
                 "scopes": sorted(c.scopes),
-                "relationship": "direct" if direct else "transitive",
+                "relationship": "direct" if c.direct else "transitive",
                 "paths": c.paths,
                 "paths_truncated": c.truncated,
             })

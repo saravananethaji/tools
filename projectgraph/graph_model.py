@@ -177,6 +177,26 @@ class Module:
         }
 
 
+def resolved_tree_exclusion_reason(module: Module) -> Optional[str]:
+    """Why a module cannot support a resolved-data query.
+
+    A parsed tree alone is not proof of Maven resolution: imported static POM
+    exports can contain DOT-shaped edges too. Consumers that promise resolved
+    answers must require the Maven source marker. Completeness remains scan
+    metadata: older valid resolved-cache records do not always store it.
+    """
+    if module.tree is None:
+        return module.error or module.analysis_status
+    if module.source != "maven-resolved":
+        return f"source={module.source} is not Maven-resolved"
+    return None
+
+
+def has_maven_resolved_tree(module: Module) -> bool:
+    """Whether ``module`` may contribute to a resolved-only result."""
+    return resolved_tree_exclusion_reason(module) is None
+
+
 @dataclass
 class Conflict:
     artifact_key: str          # groupId:artifactId
@@ -265,7 +285,7 @@ class GraphModel:
                 walk(c, module, full_path, on_path, depth + 1)
 
         for m in self.modules:
-            if not m.tree:
+            if not has_maven_resolved_tree(m):
                 continue  # unresolved modules are surfaced via their status
             resolved_modules.add(m.coord_id)
             for child in m.tree.children:
