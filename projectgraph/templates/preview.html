@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Resolution Preview · Maven Graph{% endblock %}
+{% block content %}
+<div class="card"><h2 style="margin:.2rem 0 .4rem;">Resolution Preview</h2>
+<p class="small">Runs Maven against a temporary POM-only mirror. Your selected workspace is never edited. It supports one existing literal version or version property, and proves Maven resolution only—not build or runtime compatibility.</p>
+<form id="preview-form" class="toolbar">
+  <input name="target_ga" required placeholder="groupId:artifactId" aria-label="Target library">
+  <input name="requested_version" required placeholder="Requested version" aria-label="Requested version">
+  <select name="mode" class="btn"><option value="direct">Direct dependency</option><option value="dependency-management">Dependency management</option><option value="bom">Imported BOM</option><option value="property">Version property</option></select>
+  <input name="property_name" placeholder="Property name (property mode)">
+  <select name="control_module" required class="btn">{% for module in modules %}<option value="{{ module }}">{{ module }}</option>{% endfor %}</select>
+  <label class="small"><input type="checkbox" name="allow_network"> Allow Maven downloads</label>
+  <button class="btn" type="submit">Preview resolution</button>
+</form></div>
+<div id="preview-result"></div>
+<script>
+const escapeHtml = text => String(text).replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+document.getElementById('preview-form').addEventListener('submit', async event => {
+ event.preventDefault(); const result = document.getElementById('preview-result'); result.textContent = 'Resolving temporary preview…';
+ const response = await fetch('/api/preview', {method:'POST', body:new FormData(event.target)}); const data = await response.json();
+ if (!response.ok) { result.innerHTML = `<div class="card err">${escapeHtml(data.detail || data.error || 'Preview failed')}</div>`; return; }
+ let html = `<div class="card"><h3>Changed subtrees — ${escapeHtml(data.verdict)}</h3><p class="small">Target ${escapeHtml(data.target)}:${escapeHtml(data.requested_version)}; network ${escapeHtml(data.network_mode)}.</p>`;
+ for (const module of data.modules) { html += `<div class="card"><strong>${escapeHtml(module.module)}</strong> <span class="scope-pill">${escapeHtml(module.status)}</span>`;
+   if (module.error) html += `<pre class="err-box">${escapeHtml(module.error)}</pre>`;
+   if (module.resolved_versions) html += `<p class="small">Resolved target version(s): ${escapeHtml(module.resolved_versions.join(', ') || 'not present')}</p>`;
+   if (module.changed_subtrees) { html += `<p class="small">Removed paths</p><pre class="export">${escapeHtml(module.changed_subtrees.removed.map(p=>p.join(' → ')).join('\n') || 'None')}</pre><p class="small">Preview paths</p><pre class="export">${escapeHtml(module.changed_subtrees.added.map(p=>p.join(' → ')).join('\n') || 'None')}</pre>`; }
+   html += '</div>'; }
+ result.innerHTML = html + '</div>';
+});
+</script>
+{% endblock %}

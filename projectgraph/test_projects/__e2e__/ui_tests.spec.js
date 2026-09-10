@@ -220,6 +220,29 @@ test.describe('Maven Project Graph - UI Tests', () => {
     await expect(page.locator('pre')).toHaveCount(0);
   });
 
+  test('resolution preview exposes explicit controls and rejects an unknown control POM', async ({ page }) => {
+    await page.goto(`${BASE_URL}/preview`);
+    await page.waitForLoadState('networkidle');
+    await expect(page.locator('h2')).toContainText('Resolution Preview');
+    await expect(page.locator('input[name="target_ga"]')).toBeVisible();
+    await expect(page.locator('input[name="requested_version"]')).toBeVisible();
+    await expect(page.locator('select[name="mode"]')).toBeVisible();
+    await expect(page.locator('select[name="control_module"] option')).not.toHaveCount(0);
+    await expect(page.locator('main')).toContainText('temporary POM-only mirror');
+
+    const response = await page.request.post(`${BASE_URL}/api/preview`, {
+      form: {
+        target_ga: 'org.apache.httpcomponents:httpcore',
+        requested_version: '99.0.0',
+        control_module: 'not:a:module',
+        mode: 'direct',
+      },
+    });
+    expect(response.status()).toBe(400);
+    const body = await response.json();
+    expect(body.detail || body.error).toContain('control point');
+  });
+
   test('conflicts view states resolved-only semantics', async ({ page }) => {
     await page.goto(`${BASE_URL}/conflicts`);
     await page.waitForLoadState('networkidle');

@@ -138,6 +138,31 @@ Static metadata may explain a resolved edge, but it must never fabricate one.
   paths. No artifactId-only matching. Answers are computed in memory and are
   bounded (path count and traversal budget), with any truncation reported
   rather than hidden.
+- **Resolution Preview:** an isolated, temporary Maven resolution
+  run for a user-selected version-control point. It takes a complete local
+  Maven-resolved baseline, an exact lossless artifact identity, desired version,
+  an explicit selected POM, and one bounded patch mode (direct dependency,
+  local dependency management, existing imported BOM, or exclusion plus direct
+  dependency). It writes a schema-validated overlay only under the application
+  cache, never in the selected workspace, then re-resolves affected consumers
+  with the same Maven settings. The temporary workspace mirrors the necessary
+  relative POM/parent/`.mvn` closure but excludes application source and
+  `target/`; if that closure cannot be reproduced, the preview is blocked. It
+  must fingerprint copied POMs, `.mvn`, Maven
+  settings, active profiles, and relevant environment inputs against the
+  baseline; a stale baseline is rejected. Version properties and profiles must
+  resolve to one selected source token or the preview is blocked as ambiguous.
+  Maven writes use an isolated temporary local repository, with remote download
+  mode explicitly selected and recorded. The currently delivered controls are
+  direct dependency, local dependency management, imported BOM, and a local
+  property proven to feed the selected dependency; active-profile and
+  exclusion overlays are deliberately rejected until they can be made equally
+  explicit. The primary result is a path-aware
+  **Changed subtrees** diff of baseline versus preview trees; any affected
+  consumers not previewed are visibly unknown. A preview can establish Maven
+  resolution only; it cannot establish build success, runtime/API compatibility,
+  license acceptability, or vulnerability safety. Static/partial baselines and
+  imported snapshots are rejected rather than simulated.
 - **SBOM:** generated from a completed resolved scan. Partial static exports
   must be labeled as such. CycloneDX output requires schema validation.
 - **OSV:** optional enrichment of exact resolved Maven versions. Advisory data
@@ -166,6 +191,9 @@ The current endpoints remain during consolidation:
   paths. ArtifactId-only queries are rejected; ambiguity is reported.
 - `GET /api/routes?from_coordinate=…&to_coordinate=…` returns bounded routes
   between two exact coordinates (P1.3) in memory, with no graph database.
+- `GET /api/diagnostics` returns the current scan's timestamp, source,
+  completeness, Maven/cache provenance, counts, and excluded module errors
+  (P1.9).
 - `/tree`, `/topology`, `/conflicts`, `/inventory`, `/impact`, `/snapshot`, and
   `/export` render consumers. `/impact` reports evidence only (occurrence,
   relationship, introducing artifact, paths, source POMs) and deliberately
@@ -188,6 +216,12 @@ import is resolved or static/partial.
 - A network-exposed deployment requires authentication, authorization, CSRF
   protection, TLS, rate limiting, and a stricter Maven execution sandbox.
 - Logs and API errors must redact secrets and clearly identify module failures.
+- A resolution preview must create its isolated workspace below the application
+  cache with a random non-user-controlled name, enforce module/time/disk bounds,
+  preserve original POM bytes, clean up on every terminal path, and serialize or
+  quota concurrent previews. It remains Maven code execution over an allowed
+  local repository; isolation prevents POM mutation and normal-local-repository
+  writes, not arbitrary build-plugin risk or explicitly permitted network use.
 
 ## 6. Review decisions
 
@@ -201,6 +235,9 @@ The additional proposals contained useful ideas, but their ordering was wrong.
   an installed or resolved component.
 - **Deferred:** Memgraph explorer and visualization until the same questions
   work correctly in memory and through the API.
+- **Deferred pending P1.11 gates:** automatic remediation or guessed POM/BOM
+  edits. Resolution Preview may surface evidence-backed candidates, but users
+  must choose the exact control point and apply no real-workspace mutation.
 - **Rejected for now:** arbitrary browser Cypher, browser-stored database
   credentials, database-wide cleanup, automatic Neo4j compatibility claims,
   and vulnerability wording without advisory evidence.

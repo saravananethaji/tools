@@ -153,12 +153,90 @@ verify another operating system.
   by `tests/test_scan_state.py`, `tests/test_dependency_snapshot.py`, and a
   Playwright download/upload/read-only test.
   Retained-scan cleanup and multi-scan comparison remain in P2.4.
+- [x] **P1.11 Add a temporary Maven Resolution Preview.** Let a user test a
+  proposed version change for an exact, resolved Maven artifact without
+  modifying the selected workspace. This is a resolution preview, not a build,
+  test, compatibility, or security verdict.
+
+  **Required inputs and safety boundary**
+
+  - Require a complete Maven-resolved baseline scan from a local allowed root;
+    reject static/partial scans and imported snapshots as inconclusive.
+  - Require exact lossless target identity
+    (`groupId:artifactId:type[:classifier]`) plus requested version.
+  - Require the user to choose an explicit, existing control point and patch
+    mode: direct dependency, local `dependencyManagement`, existing imported
+    BOM version, the selected version property/profile that feeds one of those,
+    or exclusion plus explicit dependency. Resolve property interpolation and
+    active Maven profiles first; if the source token is ambiguous, block the
+    preview rather than patching a guessed XML location. The application may
+    show evidence-backed candidates, but must never guess or edit a real POM.
+  - Apply a schema-validated overlay only in a unique temporary preview
+    workspace under the application cache; preserve the original POM bytes and
+    clean the workspace on success, failure, cancellation, and startup cleanup.
+    Mirror the required relative layout for the patched POM, selected consumer
+    POMs, their local parent chain, and `.mvn` inputs; do not copy `target/` or
+    application source trees. If that POM closure cannot be reproduced, block
+    the preview instead of resolving against a different model.
+    Fingerprint every copied POM, `.mvn` input, selected Maven settings, active
+    profile, and relevant environment input; reject a preview when the baseline
+    or workspace has changed since the baseline scan.
+  - Retain the original Maven command/settings and record offline/network mode,
+    timeout, Maven/JDK version, and every previewed module. Maven writes must
+    use an isolated temporary local repository; if artifacts are unavailable,
+    report that explicitly instead of silently writing to the user's normal
+    repository. Remote download mode must be an explicit user choice and be
+    recorded. Bound concurrent previews, module count, runtime, and disk use;
+    require user selection when the affected consumer set exceeds the safe
+    limit.
+
+  **Preview evidence and UI**
+
+  - Re-resolve the selected affected consumer modules with Maven, then compare
+    their resolved trees to the immutable baseline. Never compare raw POM
+    declarations as if they were resolved facts.
+  - Make **Changed subtrees** the default screen, not a summary dashboard.
+    Show only divergent branches side-by-side: before path, preview path,
+    version/scope/classifier changes, added/removed subtrees, the direct
+    bringer, and source POM/control point.
+  - Report one of: `resolved` (requested version is the only one resolved in
+    every previewed module),
+    `partially-resolved` (old version remains, with every remaining path),
+    `blocked` (Maven failed, with module/error), or `inconclusive` (baseline or
+    preview incomplete). Explicitly list affected modules that were not
+    previewed as unknown. New conflicts/drift must be shown at their exact
+    changed branches.
+  - Keep unchanged branches collapsed; cap rendered changed paths and flag
+    truncation. Offer full preview-tree navigation only after changed-subtree
+    evidence is available.
+
+  **Acceptance gates**
+
+  - Fixtures prove: a direct override wins; a second route retains the old
+    version; an imported BOM change; an exclusion-plus-direct-dependency case;
+    a Maven failure; a partial baseline rejection; classifier variants; and a
+    diamond with path-preserving diff.
+  - Tests prove the selected workspace is byte-identical before/after, temporary
+  workspace cleanup is reliable, preview failures do not replace the retained
+  scan, and each displayed diff is Maven-resolved evidence with module-owned
+  paths. Browser tests cover control-point selection and changed-subtree
+  review. No automatic POM write is permitted.
+
+  **Delivered scope:** direct dependency, local dependency management,
+  imported-BOM, and a selected local version-property controls are supported
+  when the existing token is unambiguous. It makes a temporary POM-only mirror
+  and an isolated Maven local repository, defaults to offline operation, and
+  displays path-preserving added/removed branches. Active-profile properties,
+  exclusion-plus-direct overlays, source fingerprint comparison against the
+  original scan, and preview concurrency/disk quotas remain P2 hardening;
+  they must stay rejected or explicitly unavailable rather than guessed.
 
 ### P1 exit gate
 
 An architect can select a resolved library and see where it occurs, why it is
-present, whether versions drift, and export a schema-valid SBOM without
-Memgraph or Neo4j.
+present, whether versions drift, preview a controlled version-resolution change
+without altering the workspace, and export a schema-valid SBOM without Memgraph
+or Neo4j.
 
 ## P2 — Persist and explore proven data
 

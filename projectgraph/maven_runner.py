@@ -165,7 +165,8 @@ def parse_dot_to_tree(dot_text: str, root_coord_id: str) -> Optional[TreeNode]:
 # Maven execution
 # ----------------------------------------------------------------------
 
-def run_mvn_dependency_tree(pom_dir: str) -> Tuple[bool, str, str]:
+def run_mvn_dependency_tree(pom_dir: str, extra_args: Optional[List[str]] = None,
+                            timeout: int = 300) -> Tuple[bool, str, str]:
     """Run `mvn dependency:tree -DoutputType=dot` in pom_dir, writing the
     DOT graph to a temp file to avoid logging noise on stdout.
     Returns (success, dot_text, stderr_or_error).
@@ -184,8 +185,8 @@ def run_mvn_dependency_tree(pom_dir: str) -> Tuple[bool, str, str]:
     # Each discovered POM is analysed independently.  Without --non-recursive,
     # an aggregator POM builds its entire reactor and every module writes to the
     # same output file; the last module then overwrites the graph we requested.
-    cmd = ["mvn", "--non-recursive", "dependency:tree", "-DoutputType=dot",
-           f"-DoutputFile={dot_path}", "-q"]
+    cmd = ["mvn", "--non-recursive", *(extra_args or []), "dependency:tree",
+           "-DoutputType=dot", f"-DoutputFile={dot_path}", "-q"]
     
     # Resolve mvn executable path (avoids shell=True)
     mvn_cmd = shutil.which("mvn.cmd" if os.name == "nt" else "mvn")
@@ -196,15 +197,15 @@ def run_mvn_dependency_tree(pom_dir: str) -> Tuple[bool, str, str]:
     
     try:
         proc = subprocess.run(
-            cmd, cwd=pom_dir, capture_output=True, text=True, timeout=300,
+            cmd, cwd=pom_dir, capture_output=True, text=True, timeout=timeout,
             shell=False,   # SECURITY: No shell injection risk
         )
     except FileNotFoundError:
         logger.error("  `mvn` executable not found on PATH")
         return False, "", "`mvn` executable not found on PATH"
     except subprocess.TimeoutExpired:
-        logger.error("  mvn dependency:tree timed out after 300s")
-        return False, "", "mvn dependency:tree timed out after 300s"
+        logger.error("  mvn dependency:tree timed out after %ss", timeout)
+        return False, "", f"mvn dependency:tree timed out after {timeout}s"
     if proc.returncode != 0:
         logger.error(f"  mvn failed with exit code {proc.returncode}")
         return False, "", proc.stderr or proc.stdout

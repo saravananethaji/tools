@@ -55,6 +55,7 @@ from scan_state import load_last_scan, save_last_scan
 from dependency_snapshot import export_snapshot, import_snapshot
 from pom_topology import build_topology, module_relationships
 from scan_diagnostics import build_scan_diagnostics
+from resolution_preview import run_preview
 
 # Configure logging
 logging.basicConfig(
@@ -258,6 +259,35 @@ async def snapshot_view(request: Request):
     return templates.TemplateResponse(request, "snapshot.html", {
         "root": _state["root"] or _default_root(),
     })
+
+
+@app.get("/preview", response_class=HTMLResponse)
+async def preview_view(request: Request):
+    model = await _get_model()
+    return templates.TemplateResponse(request, "preview.html", {
+        "modules": sorted(m.coord_id for m in model.modules),
+        "root": _state["root"] or _default_root(),
+    })
+
+
+@app.post("/api/preview")
+async def api_preview(target_ga: str = Form(...), requested_version: str = Form(...),
+                      control_module: str = Form(...), mode: str = Form(...),
+                      property_name: str = Form(""), allow_network: bool = Form(False)):
+    """Resolve one explicit version overlay without modifying the workspace."""
+    if _state["read_only_snapshot"]:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail="Load a local Maven scan before running a Resolution Preview")
+    try:
+        report = await run_in_threadpool(
+            run_preview, await _get_model(), CACHE_DIR,
+            target_ga=target_ga.strip(), requested_version=requested_version.strip(),
+            control_module=control_module.strip(), mode=mode,
+            property_name=property_name.strip() or None, allow_network=allow_network,
+        )
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    return JSONResponse(report)
 
 
 @app.get("/snapshot/download")

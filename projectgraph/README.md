@@ -2,7 +2,7 @@
 
 A Python (FastAPI) app that scans a folder of Java/Maven projects, runs
 `mvn --non-recursive dependency:tree -DoutputType=dot` per pom, and presents an interactive
-dependency graph with 8 capabilities:
+dependency graph with 10 capabilities:
 
 1. **Dependency tree** — lazy, per-module expansion with full transitive depth
    available on demand. Each node shows `groupId:artifactId:version`, scope,
@@ -31,6 +31,9 @@ dependency graph with 8 capabilities:
    the resolved graph on another machine.
 9. **Scan health** — shows source, timestamp, completeness, Maven/cache
    provenance, counts, and modules excluded from resolved answers.
+10. **Resolution Preview** — tests one explicit existing Maven version control
+   token in a temporary POM-only mirror, then shows only the changed resolved
+   dependency paths. It never edits the selected workspace.
 
 The web navigation uses the same order as the list above, minus Search and
 Scan health, which live inside the Dependency Tree page: `1 · Dependency Tree`,
@@ -46,7 +49,7 @@ projectgraph/
   graph_model.py    in-memory tree model + conflict detection
   neo4j_export.py   .cypher script generator
   templates/        Jinja2 HTML (base, tree, topology, conflicts, inventory,
-                    impact, snapshot, export)
+                    impact, snapshot, preview, export)
   cache/            on-disk JSON cache (auto-created)
   parser.py         (pre-existing DOT + Neo4j Bolt ingester, unchanged)
   oss_inventory.py  resolved OSS inventory (external coords, paths, prefixes)
@@ -73,13 +76,29 @@ reject folders outside `PROJECTGRAPH_ALLOWED_ROOTS`; that is intentional.
 3. In the header, paste the absolute folder that contains your Maven projects.
 4. Click **Load folder** and wait for the module count to appear.
 5. Use **Dependency Tree**, **Topology**, **Conflicts**, **OSS Inventory**,
-   **Impact**, **Neo4j Export**, and **Snapshot**.
+   **Impact**, **Neo4j Export**, **Snapshot**, and **Resolution Preview**.
 
 **Load folder** scans a different folder. **Reload** re-runs Maven for the
 currently loaded folder and refreshes its cache. The app retains exactly one
 last successful Maven-resolved scan in its local cache; after a server restart
 all tabs reopen against that saved report. A new successful load replaces it.
 Reload still requires that source folder to exist and be allowed.
+
+### Preview a controlled Maven version change
+
+Open **8 · Resolution Preview** only after a complete local Maven-resolved
+scan. Enter the target `groupId:artifactId`, desired version, the module whose
+existing POM control you intend to change, and the matching control mode:
+direct dependency, local dependency management, imported BOM, or an existing
+version property. The app patches only a temporary POM-only mirror and runs
+Maven there with an isolated local repository. The result defaults to changed
+resolved paths, including any path still bringing the old version.
+
+The default is offline. Select **Allow Maven downloads** only when the
+temporary repository needs remote artifacts. A successful preview proves Maven
+resolution only; it does not prove build, test, runtime, API, licence, or
+security compatibility. It deliberately rejects static/partial scans,
+snapshots, ambiguous property controls, and missing literal control tokens.
 
 ### Read scan health before trusting a report
 
