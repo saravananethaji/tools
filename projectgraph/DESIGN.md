@@ -28,12 +28,19 @@ as equivalent:
 
 | Source | Truth available | Valid use |
 | --- | --- | --- |
-| `mvn dependency:tree` DOT | Effective direct and transitive library graph | Tree, conflicts, impact, resolved SBOM |
-| Static `pom.xml` parsing | Declared dependencies, dependency management, parents, modules, properties | Classification, provenance hints, offline partial report |
+| `mvn dependency:tree` DOT | Effective direct and transitive library graph | Tree, conflicts, impact, used-by, resolved SBOM |
+| Static `pom.xml` parsing | Declared dependencies, dependency management, parents, modules, properties | Classification, provenance hints, POM topology (as labelled structure), offline partial report |
 
 `dependencyManagement` is not proof that a component is used. A static-POM
 export therefore cannot be called a complete SBOM or resolved dependency tree.
 Every API and report must identify its source and completeness.
+
+Static structure is not resolved structure. A `<parent>` edge means inherited
+configuration and a `<modules>` edge means build aggregation; neither one makes
+any module depend on anything. Accordingly the topology view labels each
+relationship with its own truth status (resolved, structural, or
+declared-unverified) and derives `usedBy` from resolved edges alone, so a
+library that is declared but never resolved cannot appear as used.
 
 ## 3. Target architecture
 
@@ -108,6 +115,25 @@ Static metadata may explain a resolved edge, but it must never fabricate one.
   visible rather than asserted. Paths are bounded per (module, version) and
   truncation is flagged. Unresolved modules contribute nothing and are listed
   explicitly.
+- **Topology:** POM relationships shown as separate classes with explicit truth
+  status, because a Maven reactor contains structurally different edges that
+  must never be flattened together:
+
+  | Relationship | Evidence | Truth status |
+  |---|---|---|
+  | `dependsOn` | `mvn dependency:tree` | resolved (authoritative) |
+  | `usedBy` | reverse of resolved edges | resolved (authoritative) |
+  | `parent` | `<parent>` in the POM | structural — not a dependency |
+  | `aggregates` | `<modules>` in the POM | build structure — not a dependency |
+  | `declaredDependency` | `<dependencies>` in the POM | declared-unverified |
+
+  `parent` and `aggregates` are attached from static POMs; they explain
+  structure but prove nothing about resolution. `declaredDependency` records
+  intent and is deliberately weaker than a resolved edge: a library declared
+  but never resolved never appears in `usedBy`. Unresolvable `<module>` paths
+  and external parents are reported in `unresolved_links` rather than dropped.
+  Topology fields are additive and optional in the scan schema, so scans
+  written before they existed still load and simply report no structural links.
 - **Impact:** exact canonical coordinate to affected modules and dependency
   paths. No artifactId-only matching. Answers are computed in memory and are
   bounded (path count and traversal budget), with any truncation reported
@@ -130,16 +156,21 @@ The current endpoints remain during consolidation:
   canonical coordinates by consuming module, scope, direct/transitive
   relationship, and bounded dependency paths; unresolved modules are reported
   in `excluded_modules`, never dropped.
+- `GET /api/topology` returns POM relationship classes with truth status per
+  class (P1.5); `?module=<coordinate>` returns one module's parent,
+  aggregation, declared, resolved, and used-by detail. An unknown module is a
+  404, not an empty answer.
 - `GET /api/impact?coordinate=…` returns the blast radius for an exact
   coordinate (P1.3): affected modules with POM paths, direct/transitive
   relationship, introducing artifact, scopes, minimum depth, and bounded
   paths. ArtifactId-only queries are rejected; ambiguity is reported.
 - `GET /api/routes?from_coordinate=…&to_coordinate=…` returns bounded routes
   between two exact coordinates (P1.3) in memory, with no graph database.
-- `/tree`, `/conflicts`, `/inventory`, `/impact`, and `/export` render
-  consumers. `/impact` reports evidence only (occurrence, relationship,
-  introducing artifact, paths, source POMs) and deliberately generates no
-  remediation POM XML.
+- `/tree`, `/topology`, `/conflicts`, `/inventory`, `/impact`, `/snapshot`, and
+  `/export` render consumers. `/impact` reports evidence only (occurrence,
+  relationship, introducing artifact, paths, source POMs) and deliberately
+  generates no remediation POM XML. `/topology` labels every relationship class
+  with its truth status.
 
 The versioned scan contract should eventually be shared by live Maven scans,
 JSON import/export, SBOM generation, impact analysis, and graph ingestion.

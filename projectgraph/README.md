@@ -2,30 +2,36 @@
 
 A Python (FastAPI) app that scans a folder of Java/Maven projects, runs
 `mvn --non-recursive dependency:tree -DoutputType=dot` per pom, and presents an interactive
-dependency graph with 7 capabilities:
+dependency graph with 8 capabilities:
 
 1. **Dependency tree** — per-module, fully expandable, full transitive depth.
    Each node shows `groupId:artifactId:version` + scope.
-2. **Conflicts/drift** — every Maven conflict identity
+2. **POM Topology** — the reactor's structure as separate, labelled
+   relationship classes: `parent` (POM inheritance), `aggregates` (build
+   structure), `depends on` (resolved), `used by` (resolved), and
+   `declared dependency` (unverified). Query a module to see its parent,
+   children, dependents, and declared-vs-resolved dependencies.
+3. **Conflicts/drift** — every Maven conflict identity
    (`groupId:artifactId:type[:classifier]`) that resolved to more than one
    version across resolved modules, classified as `conflict` (one module, two
    versions) or `drift` (different modules, different versions), with the
    responsible dependency path shown for each occurrence.
-3. **OSS Inventory** — resolved external (open-source) coordinates by
+4. **OSS Inventory** — resolved external (open-source) coordinates by
    consuming module, scope, and direct/transitive path, with **Excel export**.
-4. **Impact** — enter a coordinate (from `groupId:artifactId` up to a fully
+5. **Impact** — enter a coordinate (from `groupId:artifactId` up to a fully
    qualified variant) to see affected modules, the dependency that introduces
    it, the paths responsible, and the source POMs.
-5. **Search** — a search box on the tree page filters/highlights matching
+6. **Search** — a search box on the tree page filters/highlights matching
    nodes and dims the rest.
-6. **Neo4j export** — the whole graph as a `.cypher` script of `MERGE`
+7. **Neo4j export** — the whole graph as a `.cypher` script of `MERGE`
    statements (nodes `:Artifact`, edges `:DEPENDS_ON` with `scope`).
-7. **Dependency Snapshot** — export and reopen a portable, versioned copy of
+8. **Dependency Snapshot** — export and reopen a portable, versioned copy of
    the resolved graph on another machine.
 
 The web navigation uses the same order as the list above, minus Search, which
-lives inside the Dependency Tree page: `1 · Dependency Tree`, `2 · Conflicts`,
-`3 · OSS Inventory`, `4 · Impact`, `5 · Neo4j Export`, `6 · Snapshot`.
+lives inside the Dependency Tree page: `1 · Dependency Tree`, `2 · Topology`,
+`3 · Conflicts`, `4 · OSS Inventory`, `5 · Impact`, `6 · Neo4j Export`,
+`7 · Snapshot`.
 
 ## Layout
 
@@ -35,13 +41,14 @@ projectgraph/
   maven_runner.py   pom discovery, mvn exec, DOT->tree, on-disk JSON cache
   graph_model.py    in-memory tree model + conflict detection
   neo4j_export.py   .cypher script generator
-  templates/        Jinja2 HTML (base, tree, conflicts, inventory, impact,
-                    snapshot, export)
+  templates/        Jinja2 HTML (base, tree, topology, conflicts, inventory,
+                    impact, snapshot, export)
   cache/            on-disk JSON cache (auto-created)
   parser.py         (pre-existing DOT + Neo4j Bolt ingester, unchanged)
   oss_inventory.py  resolved OSS inventory (external coords, paths, prefixes)
   inventory_export.py Excel workbook export of the resolved inventory
   impact.py         in-memory blast-radius and dependency-route queries
+  pom_topology.py   POM relationships: parent, aggregates, depends-on, used-by
   scan_state.py     persist/restore the last successful resolved scan
   dependency_snapshot.py portable, versioned snapshot export/import
   maven_extractor.py offline POM extractor + coordinate-location analysis
@@ -71,9 +78,9 @@ Reload still requires that source folder to exist and be allowed.
 
 ### Move a dependency graph to another machine
 
-Use **6 · Snapshot** → **Download Dependency Snapshot**. This downloads a
+Use **7 · Snapshot** → **Download Dependency Snapshot**. This downloads a
 portable `dependency-snapshot.json`, not the internal cache. On the other
-machine, open **6 · Snapshot**, choose the file, and select **Open snapshot**.
+machine, open **7 · Snapshot**, choose the file, and select **Open snapshot**.
 The imported graph is historical and read-only: it keeps the original scan's
 paths and resolved dependencies, but cannot be refreshed until you load a
 local source folder and scan it with Maven.
@@ -150,7 +157,7 @@ relationship (`direct`/`transitive`), and the actual dependency path(s) by
 which it is reached.
 
 ```
-GET  /inventory         -> table view (also linked as "3 · OSS Inventory")
+GET  /inventory         -> table view (also linked as "4 · OSS Inventory")
 GET  /api/inventory     -> the same data as JSON
 GET  /inventory/download -> Excel workbook for the current resolved inventory
 ```
@@ -177,10 +184,49 @@ contribute; excluded modules are listed under `excluded_modules` with a reason
 never reported as a dependency. Path lists are bounded per consumer, with
 truncation flagged.
 
+## POM topology: parent, aggregates, depends-on, used-by
+
+The topology view answers structural questions about the reactor. It shows
+**five relationship classes, each labelled with its own truth status**, because
+these are genuinely different kinds of fact:
+
+| Relationship | Evidence | Truth status |
+|---|---|---|
+| `depends on` | `mvn dependency:tree` | **resolved** (authoritative) |
+| `used by` | reverse of resolved edges | **resolved** (authoritative) |
+| `parent` | `<parent>` in the POM | **structural** — not a dependency |
+| `aggregates` | `<modules>` in the POM | **build structure** — not a dependency |
+| `declared dependency` | `<dependencies>` in the POM | **unverified** — intent, not proof |
+
+```
+GET  /topology                      -> relationship classes + module detail
+GET  /topology?module=g:a:v         -> one module: parent, children, used by,
+                                       depends on, declared
+GET  /api/topology                  -> the same as JSON
+GET  /api/topology?module=g:a:v     -> module detail as JSON (404 if unknown)
+```
+
+A **parent** POM manages versions and supplies inherited configuration; it does
+not make the child depend on anything. Listing a module in `<modules>` is build
+aggregation, not a dependency edge. This matters because treating either as a
+dependency is exactly the mistake that makes a dependency report misleading.
+
+**`used by` is derived from resolved edges only.** A library that a POM declares
+but never actually resolves will *not* appear as used — so `used by` answers
+"what really pulls this in", while the declared class shows what was intended.
+
+Two honesty rules apply throughout:
+
+- `<module>` paths that do not match a scanned POM, and parents outside the
+  scanned reactor, are listed in `unresolved_links` with a reason — never
+  silently dropped.
+- Where a module reaches a library both directly and through an intermediate,
+  the **nearest occurrence** is reported, so a direct user is shown as direct.
+
 ## Impact queries (no graph database)
 
 Ask which modules a library affects, and how one library reaches another —
-either in the UI at **`/impact`** (nav item "4 · Impact") or via the API.
+either in the UI at **`/impact`** (nav item "5 · Impact") or via the API.
 Queries always require `groupId` and `artifactId`; artifactId-only matching is
 rejected so the tool never guesses a library. You may narrow with version,
 type, and classifier. A broader query can match several variants and is shown

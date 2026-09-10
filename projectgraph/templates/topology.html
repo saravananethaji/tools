@@ -1,0 +1,216 @@
+{% extends "base.html" %}
+{% block title %}POM Topology · Maven Graph{% endblock %}
+{% block content %}
+<div class="card">
+  <h2 style="margin:.2rem 0 .4rem;">POM Topology</h2>
+  <p class="small">
+    Four different relationships, kept apart. A <strong>parent</strong> POM is
+    inheritance and an <strong>aggregator</strong> is build structure — neither
+    is a dependency. A <strong>declared</strong> dependency is intent, not
+    proof of use.
+  </p>
+  <form method="get" action="/topology" class="toolbar" style="margin-bottom:0;">
+    <input type="text" name="module" value="{{ selected }}"
+           list="module-list" placeholder="groupId:artifactId:version (optional)"
+           autocomplete="off" spellcheck="false" aria-label="Module coordinate">
+    <datalist id="module-list">
+      {% for m in modules %}<option value="{{ m }}"></option>{% endfor %}
+    </datalist>
+    <button type="submit" class="btn">Show module detail</button>
+    {% if selected %}<a class="btn" href="/topology">Clear</a>{% endif %}
+  </form>
+</div>
+
+{% if detail %}
+{# ---------- per-module detail ---------- #}
+<div class="card">
+  <div class="conflict-row">
+    <div>
+      <span class="conflict-key">{{ detail.module }}</span>
+      <span class="scope-pill">{{ detail.project_type }}</span>
+      <span class="scope-pill">{{ detail.analysis_status }}</span>
+    </div>
+    <span class="small">{{ detail.pom_path }}</span>
+  </div>
+</div>
+
+<div class="card">
+  <h3 style="margin:.2rem 0 .4rem;">Parent (POM inheritance)</h3>
+  {% if detail.parent %}
+    <p class="small" style="margin:.2rem 0;">
+      <code>{{ detail.parent.coord }}</code>
+      {% if detail.parent.in_scan %}
+        <span class="scope-pill">in this scan</span>
+      {% else %}
+        <span class="scope-pill">external</span>
+      {% endif %}
+      {% if detail.parent.relative_path %}
+        <span class="small">relativePath <code>{{ detail.parent.relative_path }}</code></span>
+      {% endif %}
+    </p>
+    <p class="small" style="margin-bottom:0;">
+      Inheritance only. This parent may manage versions, but that does not make
+      this module depend on it.
+    </p>
+  {% else %}
+    <p class="small" style="margin:0;">No <code>&lt;parent&gt;</code> declared.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h3 style="margin:.2rem 0 .4rem;">Aggregates (build structure)</h3>
+  {% if detail.child_modules %}
+    {% for c in detail.child_modules %}
+      <div class="small" style="padding:.15rem 0;">
+        <a href="/topology?module={{ c.to | urlencode }}">{{ c.to }}</a>
+      </div>
+    {% endfor %}
+  {% else %}
+    <p class="small" style="margin:0;">This module aggregates no child modules.</p>
+  {% endif %}
+  {% if detail.unresolved_module_paths %}
+    <p class="small" style="margin:.5rem 0 .2rem;">
+      <span class="err">⚠ {{ detail.unresolved_module_paths | length }} declared
+      <code>&lt;module&gt;</code> path(s) did not match a scanned POM:</span>
+    </p>
+    <ul class="small" style="margin:0;">
+      {% for p in detail.unresolved_module_paths %}<li><code>{{ p }}</code></li>{% endfor %}
+    </ul>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h3 style="margin:.2rem 0 .4rem;">Used by (resolved)</h3>
+  {% if detail.used_by %}
+    <table style="width:100%; border-collapse:collapse;">
+      <thead><tr class="small">
+        <th style="text-align:left; padding:.3rem;">Module</th>
+        <th style="text-align:left; padding:.3rem;">Via</th>
+        <th style="text-align:left; padding:.3rem;">Scope</th>
+      </tr></thead>
+      <tbody>
+        {% for u in detail.used_by %}
+        <tr style="border-top:1px solid var(--border);">
+          <td style="padding:.3rem;"><a href="/topology?module={{ u.module | urlencode }}">{{ u.module }}</a></td>
+          <td style="padding:.3rem;"><code>{{ u.via }}</code></td>
+          <td style="padding:.3rem;">
+            <span class="scope-pill">{{ u.scope }}</span>
+            {% if u.direct %}<span class="scope-pill">direct</span>{% else %}<span class="scope-pill">transitive</span>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="small" style="margin:0;">
+      No scanned module resolves this module as a dependency.
+    </p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h3 style="margin:.2rem 0 .4rem;">Depends on (resolved)</h3>
+  {% if detail.direct_dependencies %}
+    {% for d in detail.direct_dependencies %}
+      <div class="small" style="padding:.15rem 0;">
+        <code>{{ d.to }}</code> <span class="scope-pill">{{ d.scope }}</span>
+      </div>
+    {% endfor %}
+  {% else %}
+    <p class="small" style="margin:0;">No resolved dependencies for this module.</p>
+  {% endif %}
+  {% if detail.depends_on_modules %}
+    <p class="small" style="margin:.5rem 0 .2rem;">Resolved to other scanned modules:</p>
+    {% for m in detail.depends_on_modules %}
+      <div class="small" style="padding:.15rem 0;">
+        <a href="/topology?module={{ m | urlencode }}">{{ m }}</a>
+      </div>
+    {% endfor %}
+  {% endif %}
+</div>
+
+<div class="card">
+  <h3 style="margin:.2rem 0 .4rem;">Declared dependencies (unverified)</h3>
+  {% if detail.declared_dependencies %}
+    {% for d in detail.declared_dependencies %}
+      <div class="small" style="padding:.15rem 0;">
+        <code>{{ d.to_coord }}</code>
+        {% if d.scope %}<span class="scope-pill">{{ d.scope }}</span>{% endif %}
+        {% if d.to %}<span class="scope-pill">internal: {{ d.to }}</span>{% endif %}
+      </div>
+    {% endfor %}
+    <p class="small" style="margin:.5rem 0 0;">
+      Present in <code>&lt;dependencies&gt;</code> but not proven by a resolved
+      scan. Treat as intent, not fact.
+    </p>
+  {% else %}
+    <p class="small" style="margin:0;">No declared <code>&lt;dependencies&gt;</code>.</p>
+  {% endif %}
+</div>
+{% endif %}
+
+{# ---------- reactor-wide relationship classes ---------- #}
+{% for key in ["parent", "aggregates", "dependsOn", "usedBy", "declaredDependency"] %}
+  {% set rel = topology.relations[key] %}
+  <div class="card">
+    <div class="conflict-row">
+      <div>
+        <span class="conflict-key">{{ rel.label }}</span>
+        {% if rel.truth == "resolved" %}
+          <span class="scope-pill">resolved</span>
+        {% elif rel.truth == "structural" %}
+          <span class="scope-pill">structural</span>
+        {% else %}
+          <span class="scope-pill">unverified</span>
+        {% endif %}
+      </div>
+      <span class="small">{{ rel.count }} edge(s)</span>
+    </div>
+    <p class="small" style="margin:.3rem 0 .4rem;">{{ rel.note }}</p>
+    {% if rel.edges %}
+      <div class="tree-body" style="max-height:18rem; overflow:auto;">
+        {% for e in rel.edges[:200] %}
+          <div class="small" style="padding:.1rem 0;">
+            <code>{{ e.from }}</code> →
+            <code>{{ e.to or e.to_coord }}</code>
+            {% if e.scope %}<span class="scope-pill">{{ e.scope }}</span>{% endif %}
+            {% if e.relative_path %}<span class="small">({{ e.relative_path }})</span>{% endif %}
+            {% if e.in_scan is defined and not e.in_scan %}<span class="scope-pill">external</span>{% endif %}
+          </div>
+        {% endfor %}
+        {% if rel.edges | length > 200 %}
+          <div class="small err">… {{ rel.edges | length - 200 }} more edge(s) not shown</div>
+        {% endif %}
+      </div>
+    {% else %}
+      <p class="small" style="margin:0;">No edges of this kind.</p>
+    {% endif %}
+  </div>
+{% endfor %}
+
+{% if topology.unresolved_links %}
+<div class="card">
+  <span class="err">⚠ {{ topology.unresolved_links | length }} structural
+  reference(s) could not be resolved inside this scan:</span>
+  <ul class="small" style="margin:.4rem 0 0;">
+    {% for u in topology.unresolved_links[:50] %}
+      <li><code>{{ u.module }}</code> — {{ u.relationship }}
+          <code>{{ u.reference }}</code>: {{ u.reason }}</li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+<div class="card">
+  <p class="small" style="margin:0;">
+    Scan completeness: <code>{{ topology.completeness }}</code>
+    ({{ topology.resolved_module_count }}/{{ topology.module_count }} module(s)
+    Maven-resolved). Structural links come from POMs; only Maven-resolved
+    modules contribute resolved and used-by edges.
+  </p>
+</div>
+
+<script>
+document.querySelector('main').dataset.rendered = 'true';
+</script>
+{% endblock %}

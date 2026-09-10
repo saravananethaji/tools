@@ -151,6 +151,18 @@ class Module:
     dependency_count: int = 0
     maven_version: Optional[str] = None
 
+    # --- POM structural relationships (static POM evidence, NOT resolved) ---
+    # These are deliberately kept apart from `tree`: a <parent> edge is POM
+    # inheritance and a <module> edge is build aggregation. Neither is a
+    # dependency, and neither may feed resolved-only answers.
+    parent_coord: Optional[str] = None
+    parent_relative_path: Optional[str] = None
+    parent_module: Optional[str] = None      # in-scan coord, if resolvable
+    declared_modules: List[str] = field(default_factory=list)   # raw <module>
+    child_modules: List[str] = field(default_factory=list)      # in-scan coords
+    unresolved_module_paths: List[str] = field(default_factory=list)
+    declared_dependencies: List[dict] = field(default_factory=list)
+
     @property
     def display(self) -> str:
         return f"{self.groupId}:{self.artifactId}:{self.version}"
@@ -174,6 +186,15 @@ class Module:
             "cache_state": self.cache_state,
             "dependency_count": self.dependency_count,
             "maven_version": self.maven_version,
+            # Structural POM relationships. Optional and additive: older scans
+            # simply lack them, and absence means "not captured", never "none".
+            "parent_coord": self.parent_coord,
+            "parent_relative_path": self.parent_relative_path,
+            "parent_module": self.parent_module,
+            "declared_modules": self.declared_modules,
+            "child_modules": self.child_modules,
+            "unresolved_module_paths": self.unresolved_module_paths,
+            "declared_dependencies": self.declared_dependencies,
         }
 
 
@@ -442,6 +463,15 @@ class GraphModel:
                 cache_state=md.get("cache_state", "none"),
                 dependency_count=md.get("dependency_count", 0),
                 maven_version=md.get("maven_version"),
+                # Backward compatible: scans written before topology capture
+                # load with these absent rather than failing.
+                parent_coord=md.get("parent_coord"),
+                parent_relative_path=md.get("parent_relative_path"),
+                parent_module=md.get("parent_module"),
+                declared_modules=md.get("declared_modules") or [],
+                child_modules=md.get("child_modules") or [],
+                unresolved_module_paths=md.get("unresolved_module_paths") or [],
+                declared_dependencies=md.get("declared_dependencies") or [],
             ))
         return model
 

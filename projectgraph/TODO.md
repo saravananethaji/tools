@@ -94,19 +94,40 @@ verify another operating system.
   paths with truncation). ArtifactId-only queries show a visible error instead
   of guessing. The view states explicitly that it reports evidence only and
   generates no POM edits. Covered by three Playwright UI tests.
-- [ ] **P1.5 Produce a validated CycloneDX SBOM.** Generate it from a completed
+- [x] **P1.5 Show POM relationships: parent, aggregation, depends-on, used-by.**
+  A Maven reactor holds four structurally different relationships, and
+  conflating them produces misleading answers. They are now modelled and shown
+  as separate, labelled classes with explicit truth status: `parent` and
+  `aggregates` are **structural** (POM inheritance and build structure — neither
+  is a dependency), `dependsOn` and `usedBy` are **resolved** (from
+  `mvn dependency:tree`), and `declaredDependency` is **declared-unverified**
+  (intent, not proof of use). Implemented in `pom_topology.py`
+  (`build_topology`, `module_relationships`), with `graph_model.Module`
+  extended by additive optional fields (`parent_coord`, `parent_module`,
+  `declared_modules`, `child_modules`, `unresolved_module_paths`,
+  `declared_dependencies`) populated by `maven_runner._attach_topology` from the
+  POMs it already parses. Surfaces as `GET /api/topology`,
+  `GET /api/topology?module=`, `GET /topology` (nav "2 · Topology"), plus
+  `GET /api/topology` for machines. Unresolvable `<module>` paths and external
+  parents are reported in `unresolved_links`, never dropped. Used-by is derived
+  from resolved edges only, so a library that is declared but never resolved
+  never appears as used. Covered by `tests/test_topology.py` (29 tests,
+  including backward-compatible loading of scans written before these fields
+  existed) and five Playwright tests, one of which proves cross-module used-by
+  end to end against `tests/fixtures/maven/shared-lib`.
+- [ ] **P1.6 Produce a validated CycloneDX SBOM.** Generate it from a completed
   resolved scan, validate against the pinned CycloneDX schema, and label any
   partial export visibly.
-- [ ] **P1.6 Add optional OSV enrichment.** Batch exact Maven coordinates,
+- [ ] **P1.7 Add optional OSV enrichment.** Batch exact Maven coordinates,
   cache responses with timestamps, expose unknown/offline states, and link
   advisories to impact paths. No advisory result is not proof of safety.
-- [ ] **P1.7 Improve tree usability.** Visually distinguish internal and OSS
+- [ ] **P1.8 Improve tree usability.** Visually distinguish internal and OSS
   libraries, preserve accessible text/table behavior, and make large-tree
   search and expansion bounded and responsive.
-- [ ] **P1.8 Add scan metadata and diagnostics.** Show scan time, source,
+- [ ] **P1.9 Add scan metadata and diagnostics.** Show scan time, source,
   completeness, Maven version, cache state, module counts, dependency counts,
   and actionable per-module errors.
-- [x] **P1.9 Add scan persistence and portable Dependency Snapshots.** Retained
+- [x] **P1.10 Add scan persistence and portable Dependency Snapshots.** Retained
   across restarts: `scan_state.py` atomically saves the last *successful
   resolved* scan and restores it on boot; a failed, empty, or partial static
   scan deliberately leaves the previous good report intact (`can_persist`),
@@ -115,7 +136,7 @@ verify another operating system.
   wraps the canonical scan model with a stable format identifier while
   stripping private cache metadata, so a graph can be moved to another machine
   (`GET /snapshot/download`, `POST /api/snapshot/load`, `GET /snapshot`, nav
-  "6 · Snapshot"). Imported snapshots are marked read-only — they are another
+  "7 · Snapshot"). Imported snapshots are marked read-only — they are another
   scan's evidence, not a local Maven result — and `/api/reload` returns 409
   rather than silently re-running Maven against them; loading a local folder
   clears the flag. Unknown formats and schema mismatches are rejected. Covered

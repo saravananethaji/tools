@@ -4,6 +4,7 @@
  */
 
 const { test, expect } = require('@playwright/test');
+const path = require('path');
 
 const BASE_URL = process.env.PROJECTGRAPH_TEST_URL || 'http://127.0.0.1:8000';
 
@@ -249,6 +250,104 @@ test.describe('Maven Project Graph - UI Tests', () => {
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     expect(response.headers()['content-disposition']).toContain('oss-inventory.xlsx');
     expect((await response.body()).subarray(0, 2).toString()).toBe('PK');
+  });
+
+  test('topology view separates structural from resolved relationships', async ({ page }) => {
+    await page.goto(`${BASE_URL}/topology`);
+    await page.waitForLoadState('networkidle');
+    await page.locator('main[data-rendered="true"]').waitFor();
+
+    await expect(page.locator('h2')).toContainText('POM Topology');
+    // Each relationship class must be labelled with its own truth status, so a
+    // structural edge can never be read as a dependency.
+    await expect(page.locator('main')).toContainText('parent (POM inheritance)');
+    await expect(page.locator('main')).toContainText('aggregates (build structure)');
+    await expect(page.locator('main')).toContainText('depends on (resolved)');
+    await expect(page.locator('main')).toContainText('used by (resolved)');
+    await expect(page.locator('main')).toContainText('declared dependency (unverified)');
+    await expect(page.locator('main')).toContainText('structural');
+  });
+
+  test('topology API reports truth status per relationship class', async ({ page }) => {
+    const res = await page.request.get(`${BASE_URL}/api/topology`);
+    expect(res.ok()).toBeTruthy();
+    const body = await res.json();
+
+    // Truth statuses must be distinct: resolved is not structural.
+    expect(body.relations.parent.truth).toBe('structural');
+    expect(body.relations.aggregates.truth).toBe('structural');
+    expect(body.relations.dependsOn.truth).toBe('resolved');
+    expect(body.relations.usedBy.truth).toBe('resolved');
+    expect(body.relations.declaredDependency.truth).toBe('declared-unverified');
+
+    for (const key of Object.keys(body.relations)) {
+      expect(body.relations[key].label).toBeTruthy();
+      expect(body.relations[key].note).toBeTruthy();
+      expect(Array.isArray(body.relations[key].edges)).toBeTruthy();
+    }
+    expect(['complete', 'partial']).toContain(body.completeness);
+    expect(Array.isArray(body.unresolved_links)).toBeTruthy();
+  });
+
+  test('topology API returns parent and aggregation for a module', async ({ page }) => {
+    const module = 'com.company:order-service-code:1.5.0';
+    const res = await page.request.get(
+      `${BASE_URL}/api/topology?module=${encodeURIComponent(module)}`);
+    expect(res.ok()).toBeTruthy();
+    const body = await res.json();
+    expect(body.module).toBe(module);
+    // Fixture declares a parent, so it must be reported with in-scan status.
+    expect(body.parent).toBeTruthy();
+    expect(body.parent.coord).toBe('com.company:order-service:1.5.0');
+    expect(body.parent.in_scan).toBe(true);
+    expect(Array.isArray(body.used_by)).toBeTruthy();
+    expect(Array.isArray(body.declared_dependencies)).toBeTruthy();
+  });
+
+  test('topology API rejects an unknown module coordinate', async ({ page }) => {
+    const res = await page.request.get(
+      `${BASE_URL}/api/topology?module=${encodeURIComponent('no.such:module:9.9.9')}`);
+    expect(res.status()).toBe(404);
+  });
+
+  test('used by is proven from resolved edges in a shared-library reactor', async ({ page }) => {
+    // This test re-scans a different root, and /api/load persists the result as
+    // the retained scan. Capture the original root first and restore exactly
+    // that, or later tests (and the next server boot) would see the fixture.
+    const fixture = path.resolve(__dirname, '../../tests/fixtures/maven/shared-lib');
+    const stateBefore = await (await page.request.get(`${BASE_URL}/api/state`)).json();
+    const originalRoot = stateBefore.metadata.root;
+    expect(originalRoot).toBeTruthy();
+
+    try {
+      const load = await page.request.post(`${BASE_URL}/api/load`, {
+        form: { root: fixture },
+      });
+      expect(load.ok()).toBeTruthy();
+
+      // Two modules resolve the same real library offline.
+      const body = await (await page.request.get(`${BASE_URL}/api/topology`)).json();
+      const shared = Object.keys(body.used_by).filter((k) => k.includes('commons-codec'));
+      expect(shared.length).toBeGreaterThan(0);
+      const users = body.used_by[shared[0]].map((u) => u.module);
+      expect(users).toContain('fixture.projectgraph:consumer-a:1.0.0');
+      expect(users).toContain('fixture.projectgraph:consumer-b:1.0.0');
+
+      // A declared-only edge must never be reported as usage.
+      expect(body.relations.declaredDependency.truth).toBe('declared-unverified');
+
+      await page.goto(`${BASE_URL}/topology?module=${encodeURIComponent('fixture.projectgraph:consumer-a:1.0.0')}`);
+      await page.waitForLoadState('networkidle');
+      await page.locator('main[data-rendered="true"]').waitFor();
+      await expect(page.locator('main')).toContainText('Used by (resolved)');
+      await expect(page.locator('main')).toContainText('Parent (POM inheritance)');
+      await expect(page.locator('main')).toContainText('shared-lib-parent');
+    } finally {
+      const restore = await page.request.post(`${BASE_URL}/api/load`, {
+        form: { root: originalRoot },
+      });
+      expect(restore.ok()).toBeTruthy();
+    }
   });
 
   test('Dependency Snapshot downloads, uploads, and becomes read-only', async ({ page }, testInfo) => {

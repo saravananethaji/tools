@@ -438,8 +438,77 @@ def build_model(root_dir: str, cache_dir: str,
 
         model.add_module(module)
 
+    _attach_topology(model, pom_infos)
     logger.info(f"Model complete: {len(model.modules)} module(s) loaded")
     return model
+
+
+def _attach_topology(model: GraphModel, pom_infos: list) -> None:
+    """Copy static POM structure (parent, modules, declared deps) onto modules.
+
+    ``parse_pom`` already read these for classification; this attaches them to
+    the canonical model so the views and exported snapshots can show POM
+    topology without re-reading the disk.
+
+    Structural evidence stays separate from resolved evidence. ``<parent>`` is
+    POM inheritance and ``<modules>`` is build aggregation — neither is a
+    dependency — and declared ``<dependencies>`` are unverified intent. None of
+    them may feed a resolved-only answer.
+    """
+    by_coord = {m.coord_id: m for m in model.modules}
+    by_ga: dict = {}
+    for module in model.modules:
+        by_ga.setdefault(f"{module.groupId}:{module.artifactId}", []).append(module)
+    # `find_poms` yields paths exactly as discovered (often relative), while a
+    # resolved <module> candidate is absolute. Key on the resolved form so the
+    # two can be compared reliably.
+    by_pom = {str(Path(m.pom_path).resolve()): m for m in model.modules}
+
+    def resolve_ga(group_id: str, artifact_id: str, version: Optional[str]) -> Optional[str]:
+        if version:
+            exact = f"{group_id}:{artifact_id}:{version}"
+            if exact in by_coord:
+                return exact
+        candidates = by_ga.get(f"{group_id}:{artifact_id}", [])
+        return candidates[0].coord_id if len(candidates) == 1 else None
+
+    for pom in pom_infos:
+        module = by_pom.get(str(Path(pom.path).resolve()))
+        if module is None:
+            continue
+
+        if pom.parent is not None:
+            module.parent_coord = pom.parent.coord
+            module.parent_relative_path = pom.parent.relativePath
+            module.parent_module = resolve_ga(
+                pom.parent.groupId, pom.parent.artifactId, pom.parent.version
+            )
+
+        module.declared_modules = list(pom.modules or [])
+        base = Path(pom.directory)
+        for raw in module.declared_modules:
+            # A <module> is a path relative to this POM's directory.
+            candidate = (base / raw).resolve() / "pom.xml"
+            child = by_pom.get(str(candidate))
+            if child is not None:
+                module.child_modules.append(child.coord_id)
+            else:
+                # Reported, never dropped: an unresolvable <module> path means
+                # the reactor is only partially represented.
+                module.unresolved_module_paths.append(raw)
+
+        module.declared_dependencies = [
+            {
+                "groupId": dep.groupId,
+                "artifactId": dep.artifactId,
+                "version": dep.version,
+                "scope": dep.scope,
+                "type": dep.type,
+                "classifier": dep.classifier,
+                "coord_id": dep.coord,
+            }
+            for dep in (pom.dependencies or [])
+        ]
 
 
 def _count_tree_nodes(node: TreeNode) -> int:

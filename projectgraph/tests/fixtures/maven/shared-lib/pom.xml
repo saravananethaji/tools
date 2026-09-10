@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Fixture for POM topology: two modules in one reactor that both resolve the
+     same real library, so `used by` is provable end to end without a network.
+     httpclient 4.5.13 resolves offline in this environment (see resolved-app). -->
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>fixture.projectgraph</groupId>
+  <artifactId>shared-lib-parent</artifactId>
+  <version>1.0.0</version>
+  <packaging>pom</packaging>
+
+  <modules>
+    <module>consumer-a</module>
+    <module>consumer-b</module>
+  </modules>
+</project>

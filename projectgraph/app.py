@@ -7,6 +7,9 @@ Routes:
   GET  /api/impact        -> blast radius for an exact coordinate (P1.3)
   GET  /api/routes        -> dependency routes between coordinates (P1.3)
   GET  /impact            -> impact view for an exact coordinate (P1.4)
+  GET  /api/topology      -> POM relationship classes as JSON (P1.5)
+  GET  /topology          -> POM topology view: parent, aggregates,
+                             depends on, used by (P1.5)
   GET  /tree              -> tree view (option 1) with search (option 3)
   GET  /conflicts         -> conflicts view (option 2)
   GET  /inventory         -> OSS inventory view (P1.1)
@@ -49,6 +52,7 @@ from impact import blast_radius, dependency_routes
 from inventory_export import inventory_xlsx
 from scan_state import load_last_scan, save_last_scan
 from dependency_snapshot import export_snapshot, import_snapshot
+from pom_topology import build_topology, module_relationships
 
 # Configure logging
 logging.basicConfig(
@@ -344,6 +348,49 @@ async def impact_view(request: Request, coordinate: str = "",
         "error": error,
         "coordinate": coordinate.strip(),
         "max_paths": max_paths,
+        "root": _state["root"] or _default_root(),
+    })
+
+
+@app.get("/api/topology")
+async def api_topology(module: str = ""):
+    """POM relationships as typed classes (P1.5).
+
+    Each class carries its own truth status: ``resolved`` (from
+    ``mvn dependency:tree``), ``structural`` (parent/aggregation, which are not
+    dependencies), or ``declared-unverified`` (POM ``<dependencies>``, which
+    prove intent but not usage).
+    """
+    model = await _get_model()
+    if module.strip():
+        detail = await run_in_threadpool(module_relationships, model, module.strip())
+        if detail is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No module matches coordinate: {module.strip()}",
+            )
+        return JSONResponse(detail)
+    return JSONResponse(await run_in_threadpool(build_topology, model))
+
+
+@app.get("/topology", response_class=HTMLResponse)
+async def topology_view(request: Request, module: str = ""):
+    """POM topology view (P1.5): parent, aggregation, depends-on, used-by.
+
+    These are shown as separate, labelled relationship classes. A parent POM
+    edge and a ``<module>`` edge are structure, not dependency, and a declared
+    dependency is not proof of use.
+    """
+    model = await _get_model()
+    topology = await run_in_threadpool(build_topology, model)
+    detail = None
+    if module.strip():
+        detail = await run_in_threadpool(module_relationships, model, module.strip())
+    return templates.TemplateResponse(request, "topology.html", {
+        "topology": topology,
+        "detail": detail,
+        "selected": module.strip(),
+        "modules": sorted(m.coord_id for m in model.modules),
         "root": _state["root"] or _default_root(),
     })
 
