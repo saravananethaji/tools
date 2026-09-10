@@ -44,7 +44,7 @@ class ConflictAndDriftTests(unittest.TestCase):
         conflicts = one_module_model("g:app:1", dot).conflicts()
         self.assertEqual(1, len(conflicts))
         c = conflicts[0]
-        self.assertEqual("shared.lib:lib", c.artifact_key)
+        self.assertEqual("shared.lib:lib:jar", c.artifact_key)
         self.assertEqual("conflict", c.kind)
         self.assertEqual(["1", "2"], c.versions)
         self.assertEqual(["g:app:1"], c.modules)
@@ -126,6 +126,59 @@ class ConflictAndDriftTests(unittest.TestCase):
             '}\n'
         )
         self.assertEqual([], one_module_model("g:app:1", dot).conflicts())
+
+    def test_classifier_variants_are_not_version_conflicts(self):
+        """Maven resolves jar and jar:tests as separate conflict identities."""
+        dot = (
+            'digraph "g:app:jar:1" {\n'
+            '"g:app:jar:1" -> "shared.lib:lib:jar:1:compile"\n'
+            '"g:app:jar:1" -> "shared.lib:lib:jar:tests:2:test"\n'
+            '}\n'
+        )
+        self.assertEqual([], one_module_model("g:app:1", dot).conflicts())
+
+    def test_same_classifier_variant_at_two_versions_is_a_conflict(self):
+        dot = (
+            'digraph "g:app:jar:1" {\n'
+            '"g:app:jar:1" -> "x:left:jar:1:compile"\n'
+            '"g:app:jar:1" -> "x:right:jar:1:compile"\n'
+            '"x:left:jar:1:compile" -> "shared.lib:lib:jar:tests:1:test"\n'
+            '"x:right:jar:1:compile" -> "shared.lib:lib:jar:tests:2:test"\n'
+            '}\n'
+        )
+        conflicts = one_module_model("g:app:1", dot).conflicts()
+        self.assertEqual(1, len(conflicts))
+        self.assertEqual("shared.lib:lib:jar:tests", conflicts[0].artifact_key)
+
+    def test_occurrences_keep_their_own_scope_and_directness(self):
+        dot = (
+            'digraph "g:app:jar:1" {\n'
+            '"g:app:jar:1" -> "shared.lib:lib:jar:1:test"\n'
+            '"g:app:jar:1" -> "x:mid:jar:1:compile"\n'
+            '"x:mid:jar:1:compile" -> "shared.lib:lib:jar:1:compile"\n'
+            '"g:app:jar:1" -> "shared.lib:lib:jar:2:runtime"\n'
+            '}\n'
+        )
+        conflict = one_module_model("g:app:1", dot).conflicts()[0]
+        version_one = [o for o in conflict.occurrences if o["version"] == "1"]
+        by_path = {tuple(o["path"]): o for o in version_one}
+        direct = by_path[("g:app:jar:1", "shared.lib:lib:jar:1")]
+        transitive = by_path[("g:app:jar:1", "x:mid:jar:1", "shared.lib:lib:jar:1")]
+        self.assertEqual("test", direct["scope"])
+        self.assertTrue(direct["direct"])
+        self.assertEqual("compile", transitive["scope"])
+        self.assertFalse(transitive["direct"])
+
+    def test_static_tree_does_not_contribute_to_conflicts(self):
+        dot = (
+            'digraph "g:app:jar:1" {\n'
+            '"g:app:jar:1" -> "shared.lib:lib:jar:1:compile"\n'
+            '"g:app:jar:1" -> "shared.lib:lib:jar:2:compile"\n'
+            '}\n'
+        )
+        self.assertEqual([], one_module_model(
+            "g:app:1", dot, source="pom-static", completeness="partial",
+            analysis_status="partial_static").conflicts())
 
     def test_paths_are_bounded_and_truncation_flagged(self):
         # lib:1 is reached twice (diamond) while lib:2 is direct.

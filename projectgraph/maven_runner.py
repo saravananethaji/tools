@@ -78,7 +78,10 @@ def parse_dot_to_tree(dot_text: str, root_coord_id: str) -> Optional[TreeNode]:
     already-visited nodes.
     """
     # build adjacency
-    adj: Dict[str, List[str]] = {}
+    # Preserve edge scope separately from canonical identity. A Maven tree can
+    # reach the same G:A:type[:classifier]:version through different scopes;
+    # using only the canonical child ID here would silently overwrite one.
+    adj: Dict[str, List[dict]] = {}
     node_meta: Dict[str, dict] = {}
     root_graph_id = root_coord_id
 
@@ -103,7 +106,10 @@ def parse_dot_to_tree(dot_text: str, root_coord_id: str) -> Optional[TreeNode]:
         dst = parse_maven_coordinate(dst_raw)
         node_meta[src["id"]] = src
         node_meta[dst["id"]] = dst
-        adj.setdefault(src["id"], []).append(dst["id"])
+        adj.setdefault(src["id"], []).append({
+            "id": dst["id"],
+            "scope": dst.get("scope", "compile"),
+        })
 
     if root_graph_id not in node_meta:
         parts = root_coord_id.split(":")
@@ -119,26 +125,28 @@ def parse_dot_to_tree(dot_text: str, root_coord_id: str) -> Optional[TreeNode]:
         else:
             return None
 
-    def build(coord_id: str) -> TreeNode:
+    def build(coord_id: str, scope: Optional[str] = None) -> TreeNode:
         meta = node_meta[coord_id]
         node = TreeNode(
             coord_id=coord_id,
             groupId=meta["groupId"],
             artifactId=meta["artifactId"],
             version=meta["version"],
-            scope=meta.get("scope", "compile"),
+            scope=scope or meta.get("scope", "compile"),
             packaging=meta.get("packaging", "jar"),
             classifier=meta.get("classifier"),
         )
         return node
 
-    def build_path(coord_id: str, ancestors: set[str]) -> TreeNode:
-        node = build(coord_id)
+    def build_path(coord_id: str, ancestors: set[str],
+                   scope: Optional[str] = None) -> TreeNode:
+        node = build(coord_id, scope)
         identity = node.artifact_id
         if identity in ancestors:
             return node
         next_ancestors = ancestors | {identity}
-        for child_id in adj.get(coord_id, []):
+        for edge in adj.get(coord_id, []):
+            child_id = edge["id"]
             child_meta = node_meta[child_id]
             child_identity_parts = [child_meta["groupId"], child_meta["artifactId"], child_meta.get("packaging", "jar")]
             if child_meta.get("classifier"):
@@ -146,7 +154,8 @@ def parse_dot_to_tree(dot_text: str, root_coord_id: str) -> Optional[TreeNode]:
             child_identity_parts.append(child_meta["version"])
             if ":".join(child_identity_parts) in next_ancestors:
                 continue
-            node.children.append(build_path(child_id, next_ancestors))
+            node.children.append(build_path(child_id, next_ancestors,
+                                            edge["scope"]))
         return node
 
     return build_path(root_graph_id, set())

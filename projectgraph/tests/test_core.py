@@ -261,7 +261,8 @@ class CoreBehaviorTests(unittest.TestCase):
             ))
 
         conflicts = model.conflicts()
-        self.assertEqual(["x:shared"], [conflict.artifact_key for conflict in conflicts])
+        self.assertEqual(["x:shared:jar"],
+                         [conflict.artifact_key for conflict in conflicts])
         self.assertEqual(["1", "2"], conflicts[0].versions)
 
     def test_export_has_lossless_ids_and_idempotent_constraint(self):

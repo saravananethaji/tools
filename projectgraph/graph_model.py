@@ -199,7 +199,7 @@ def has_maven_resolved_tree(module: Module) -> bool:
 
 @dataclass
 class Conflict:
-    artifact_key: str          # groupId:artifactId
+    artifact_key: str          # groupId:artifactId:packaging[:classifier]
     versions: List[str]
     # "conflict" = one module's resolved tree contains >1 version of this GA;
     # "drift"    = different modules resolve different versions.
@@ -238,7 +238,7 @@ class GraphModel:
     # --- queries ---
 
     def conflicts(self, max_paths: int = 8) -> List[Conflict]:
-        """Find groupId:artifactId pairs resolved to >1 distinct version.
+        """Find Maven conflict identities resolved to >1 distinct version.
 
         Computed only from resolved, module-owned dependency data:
           * modules without a resolved tree contribute nothing (they are
@@ -252,42 +252,44 @@ class GraphModel:
 
         ``kind`` distinguishes:
           * ``conflict`` — one module's own tree contains two versions of the
-            same GA (its classpath cannot satisfy both);
+            same Maven conflict identity (its classpath cannot satisfy both);
           * ``drift``    — different modules resolved different versions.
         """
-        # artifact_key -> version -> canonical_id -> module_id -> accumulator
+        # artifact_key (G:A:type[:classifier]) -> version -> canonical_id ->
+        # module_id -> accumulator. Version is intentionally excluded from
+        # the key because it is the value being compared.
         seen: Dict[str, Dict[str, Dict[str, Dict[str, dict]]]] = defaultdict(
             lambda: defaultdict(lambda: defaultdict(dict)))
-        resolved_modules: set = set()
 
         def walk(node: TreeNode, module: Module, path: List[str],
                  on_path: set, depth: int) -> None:
             if node.artifact_id in on_path:
                 return  # real cycle: stop this branch
             on_path = on_path | {node.artifact_id}
-            key = f"{node.groupId}:{node.artifactId}"
+            key_parts = [node.groupId, node.artifactId, node.packaging]
+            if node.classifier:
+                key_parts.append(node.classifier)
+            key = ":".join(key_parts)
             per_module = seen[key][node.version][node.artifact_id]
             acc = per_module.setdefault(module.coord_id, {
                 "module": module.display,
                 "paths": [],
                 "seen_paths": 0,
-                "scopes": set(),
-                "direct": False,
             })
-            acc["scopes"].add(node.scope)
-            if depth == 1:
-                acc["direct"] = True
             acc["seen_paths"] += 1
             full_path = path + [node.artifact_id]
             if len(acc["paths"]) < max_paths:
-                acc["paths"].append(full_path)
+                acc["paths"].append({
+                    "path": full_path,
+                    "scope": node.scope,
+                    "direct": depth == 1,
+                })
             for c in node.children:
                 walk(c, module, full_path, on_path, depth + 1)
 
         for m in self.modules:
             if not has_maven_resolved_tree(m):
                 continue  # unresolved modules are surfaced via their status
-            resolved_modules.add(m.coord_id)
             for child in m.tree.children:
                 walk(child, m, [m.tree.artifact_id],
                      {m.tree.artifact_id}, 1)
@@ -306,14 +308,15 @@ class GraphModel:
                         module_ids.add(module_id)
                         if acc["seen_paths"] > len(acc["paths"]):
                             truncated = True
-                        for path in acc["paths"]:
+                        for path_data in acc["paths"]:
+                            path = path_data["path"]
                             occurrences.append({
                                 "module": acc["module"],
                                 "module_id": module_id,
                                 "version": version,
                                 "canonical_id": canonical_id,
-                                "scope": ",".join(sorted(acc["scopes"])),
-                                "direct": acc["direct"],
+                                "scope": path_data["scope"],
+                                "direct": path_data["direct"],
                                 "depth": len(path) - 1,
                                 "path": path,
                             })

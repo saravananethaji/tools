@@ -60,7 +60,8 @@ verify another operating system.
   `tests/test_inventory.py` and the Playwright inventory test.
 - [x] **P1.2 Correct conflicts and version drift.** Compute them only from
   resolved, module-owned dependency data and show the paths responsible.
-  `GraphModel.conflicts()` now distinguishes `conflict` (one module resolves
+  `GraphModel.conflicts()` groups by Maven conflict identity
+  (`groupId:artifactId:type[:classifier]`) and distinguishes `conflict` (one module resolves
   two versions itself) from `drift` (different modules resolve different
   versions); every occurrence carries the module-owned dependency path,
   scope, depth, and direct flag; paths are bounded per (module, version) with
