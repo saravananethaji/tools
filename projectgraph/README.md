@@ -6,14 +6,16 @@ dependency graph with 6 capabilities:
 
 1. **Dependency tree** — per-module, fully expandable, full transitive depth.
    Each node shows `groupId:artifactId:version` + scope.
-2. **Conflicts/drift** — every `groupId:artifactId` that resolved to more than
-   one version across resolved modules, classified as `conflict` (one module,
-   two versions) or `drift` (different modules, different versions), with the
+2. **Conflicts/drift** — every Maven conflict identity
+   (`groupId:artifactId:type[:classifier]`) that resolved to more than one
+   version across resolved modules, classified as `conflict` (one module, two
+   versions) or `drift` (different modules, different versions), with the
    responsible dependency path shown for each occurrence.
 3. **OSS Inventory** — resolved external (open-source) coordinates by
    consuming module, scope, and direct/transitive path.
-4. **Impact** — enter an exact coordinate to see affected modules, the
-   dependency that introduces it, the paths responsible, and the source POMs.
+4. **Impact** — enter a coordinate (from `groupId:artifactId` up to a fully
+   qualified variant) to see affected modules, the dependency that introduces
+   it, the paths responsible, and the source POMs.
 5. **Search** — a search box on the tree page filters/highlights matching
    nodes and dims the rest.
 6. **Neo4j export** — the whole graph as a `.cypher` script of `MERGE`
@@ -40,27 +42,62 @@ projectgraph/
   requirements.txt
 ```
 
-## Run
+## Web UI quick start
+
+The UI scans Maven projects only after you choose a folder. The server will
+reject folders outside `PROJECTGRAPH_ALLOWED_ROOTS`; that is intentional.
+
+1. Start the server with an allowed **parent** folder configured.
+2. Open `http://127.0.0.1:8000`.
+3. In the header, paste the absolute folder that contains your Maven projects.
+4. Click **Load folder** and wait for the module count to appear.
+5. Use **Dependency Tree**, **Conflicts**, **OSS Inventory**, and **Impact**.
+
+**Load folder** scans a different folder. **Reload** re-runs Maven for the
+currently loaded folder and refreshes its cache.
+
+### macOS / Linux
 
 ```bash
 cd projectgraph
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-export PROJECTGRAPH_ALLOWED_ROOTS="/path/to/your/java/projects"
-python app.py
-# open http://127.0.0.1:8000
+export PROJECTGRAPH_ALLOWED_ROOTS="/path/to/parent/of/your/java/projects"
+python -m uvicorn app:app --reload
 ```
 
-By default it scans the local `test_projects` fixtures. `/api/load` accepts only
-absolute directories under `PROJECTGRAPH_ALLOWED_ROOTS` (the application
-directory is the default). To point it at your own projects, set that variable
-before starting the server and POST the root:
+### Windows 11 — Git Bash
+
+```bash
+cd /c/Users/you/path/to/projectgraph
+python -m venv .venv
+source .venv/Scripts/activate
+python -m pip install -r requirements.txt
+
+# Use C:/ form in both the environment variable and browser input.
+export PROJECTGRAPH_ALLOWED_ROOTS='C:/Users/you/Projects'
+python -m uvicorn app:app --reload
+```
+
+For multiple allowed roots on Windows, use a quoted semicolon-separated list:
+
+```bash
+export PROJECTGRAPH_ALLOWED_ROOTS='C:/Users/you/Projects;D:/shared/maven-projects'
+```
+
+Open `http://127.0.0.1:8000`, enter a folder such as
+`C:/Users/you/Projects/my-maven-repos` in the header, then click **Load
+folder**. Set the variable in the same Git Bash session that starts Uvicorn.
+It does not require a Git commit or a remote push.
+
+By default the app scans local `test_projects` fixtures. `/api/load` accepts
+only absolute directories under `PROJECTGRAPH_ALLOWED_ROOTS` (the application
+directory is the default). The browser is the normal way to load a folder; for
+automation, use the API:
 
 ```bash
 curl -d 'root=/path/to/your/java/projects' http://127.0.0.1:8000/api/load
 ```
-
-or use **Reload** in the UI after editing the root in `app.py`.
 
 ## How it works
 
@@ -74,10 +111,11 @@ or use **Reload** in the UI after editing the root in `app.py`.
   schema, Maven command/version, age, POM/configuration fingerprint, and local
   Maven settings fingerprint remain compatible. **Reload** always re-runs
   Maven and refreshes the cache.
-- Conflicts/drift: a `groupId:artifactId` resolved to >1 distinct version
+- Conflicts/drift: a Maven conflict identity
+  (`groupId:artifactId:type[:classifier]`) resolved to >1 distinct version
   across **resolved** module trees. `conflict` means one module resolves two
   versions itself; `drift` means different modules resolve different versions.
-  Every row shows the dependency path, scope, and depth responsible.
+  Every row shows the responsible dependency path, scope, and depth.
   Unresolved modules contribute nothing and are listed explicitly at the top.
 - Export: every unique artifact is a `:Artifact` node; every parent->child
   edge is a `:DEPENDS_ON {scope}` relationship.
@@ -101,18 +139,20 @@ any configured prefixes:
 export PROJECTGRAPH_INTERNAL_PREFIXES="com.acme,org.mycompany"
 ```
 
-The inventory is honest about what it covers: only modules with a resolved
-tree contribute; unresolved modules are listed under `excluded_modules` with a
-reason (they are never silently treated as empty), and the module's own root
-node is never reported as a dependency. Path lists are bounded per consumer,
-with truncation flagged.
+The inventory is honest about what it covers: only Maven-resolved module trees
+contribute; excluded modules are listed under `excluded_modules` with a reason
+(they are never silently treated as empty), and the module's own root node is
+never reported as a dependency. Path lists are bounded per consumer, with
+truncation flagged.
 
 ## Impact queries (no graph database)
 
 Ask which modules a library affects, and how one library reaches another —
 either in the UI at **`/impact`** (nav item "4 · Impact") or via the API.
-Queries need an **exact** coordinate — artifactId-only matching is rejected so
-the tool never guesses a groupId.
+Queries always require `groupId` and `artifactId`; artifactId-only matching is
+rejected so the tool never guesses a library. You may narrow with version,
+type, and classifier. A broader query can match several variants and is shown
+as ambiguous rather than silently picking one.
 
 ```bash
 # Blast radius: who depends on this, through which paths?
