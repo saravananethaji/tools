@@ -45,6 +45,7 @@ from neo4j_export import export_cypher
 from pom_parser import parse_pom, PomInfo, Dependency, Plugin, ParentInfo
 from oss_inventory import build_inventory
 from impact import blast_radius, dependency_routes
+from scan_state import load_last_scan, save_last_scan
 
 # Configure logging
 logging.basicConfig(
@@ -59,6 +60,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CACHE_DIR = os.path.join(BASE_DIR, "cache")
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
+LAST_SCAN_PATH = Path(CACHE_DIR) / "last-resolved-scan.json"
 
 # Ensure runtime dirs exist (git skips empty directories).
 os.makedirs(CACHE_DIR, exist_ok=True)
@@ -68,8 +70,15 @@ app = FastAPI(title="Maven Dependency Graph")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
-# In-memory current model + the root it was built from
-_state: dict = {"root": None, "model": None}
+# In-memory current model + the root it was built from. One successful
+# Maven-resolved scan survives a server restart in CACHE_DIR.
+_restored_model = load_last_scan(LAST_SCAN_PATH)
+_state: dict = {
+    "root": _restored_model.root if _restored_model else None,
+    "model": _restored_model,
+}
+if _restored_model:
+    logger.info("Restored last resolved scan: %s", _restored_model.root)
 
 
 def _validate_root_path(root: str) -> str:
@@ -320,10 +329,11 @@ async def export_download():
 
 @app.post("/api/reload")
 async def api_reload():
-    root = _state["root"] or _default_root()
+    root = _validate_root_path(_state["root"] or _default_root())
     logger.info(f"Reload requested for: {root}")
     # Run blocking build_model in thread pool to avoid blocking event loop
     _state["model"] = await run_in_threadpool(build_model, root, CACHE_DIR, True)
+    save_last_scan(LAST_SCAN_PATH, _state["model"])
     count = len(_state["model"].modules)
     logger.info(f"Reload complete: {count} module(s)")
     return JSONResponse({"ok": True, "modules": count})
@@ -334,11 +344,13 @@ async def api_load(root: str = Form(...)):
     logger.info(f"Load requested for: {root}")
     # Validate and sanitize the input path
     abs_root = _validate_root_path(root)
-    _state["root"] = abs_root
-    logger.info(f"Scanning directory: {_state['root']}")
+    logger.info(f"Scanning directory: {abs_root}")
     # Run blocking build_model in thread pool to avoid blocking event loop
-    _state["model"] = await run_in_threadpool(build_model, _state["root"], CACHE_DIR)
-    count = len(_state["model"].modules)
+    model = await run_in_threadpool(build_model, abs_root, CACHE_DIR)
+    _state["root"] = abs_root
+    _state["model"] = model
+    save_last_scan(LAST_SCAN_PATH, model)
+    count = len(model.modules)
     logger.info(f"Load complete: {count} module(s)")
     return JSONResponse({"ok": True, "modules": count})
 
@@ -383,6 +395,7 @@ async def api_load_json(file: UploadFile = File(...)):
             )
         _state["model"] = model
         _state["root"] = model.root or "loaded-from-json"
+        save_last_scan(LAST_SCAN_PATH, model)
         return JSONResponse({
             "ok": True,
             "modules": len(model.modules),

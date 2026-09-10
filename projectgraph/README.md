@@ -54,7 +54,10 @@ reject folders outside `PROJECTGRAPH_ALLOWED_ROOTS`; that is intentional.
 5. Use **Dependency Tree**, **Conflicts**, **OSS Inventory**, and **Impact**.
 
 **Load folder** scans a different folder. **Reload** re-runs Maven for the
-currently loaded folder and refreshes its cache.
+currently loaded folder and refreshes its cache. The app retains exactly one
+last successful Maven-resolved scan in its local cache; after a server restart
+all tabs reopen against that saved report. A new successful load replaces it.
+Reload still requires that source folder to exist and be allowed.
 
 ### macOS / Linux
 
