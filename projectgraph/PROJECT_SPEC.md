@@ -1,5 +1,9 @@
 # Project Specification: Maven Dependency Graph (`projectgraph`)
 
+> This file records the original feature specification. Current product
+> boundaries and correctness rules are in `DESIGN.md`; the only prioritized
+> backlog is `TODO.md`. Where wording conflicts, those two files win.
+
 > **Comprehensive Technical Specification: Requirements, Architecture, Logic Implemented, and Test Verification Matrix**
 
 ---
@@ -11,7 +15,8 @@
 - Detecting version conflicts across disjoint services and shared libraries.
 - Classifying Maven projects into architectural roles (BOMs, Frameworks, Services, Packaging, Plugins).
 - Exporting graph topologies to Neo4j Cypher and JSON for graph database querying and security audits.
-- Identifying and remediating vulnerable artifacts through ancestral parent POM tracing.
+- Locating exact artifact coordinates and showing parent-chain context without
+  claiming vulnerability discovery or an automatic remediation.
 
 ---
 
@@ -29,7 +34,7 @@
 | **FR-6** | **Search & Real-Time Filtering** | Search box on the tree page allowing substring filtering against `groupId`, `artifactId`, or `version`. Matching nodes are highlighted in accent colors while non-matching nodes are dimmed. |
 | **FR-7** | **Neo4j Cypher Export** | Export the unified dependency graph as `.cypher` statements using idempotent `MERGE` queries (`:Artifact` nodes and `:DEPENDS_ON` relationships). |
 | **FR-8** | **JSON State Export & Ingestion** | Offline extraction CLI (`maven_extractor.py`) producing rich JSON snapshots, paired with a web API (`/api/load-json`) to visualize graphs without requiring a live Maven/Java environment. |
-| **FR-9** | **Ancestral Vulnerability Tracing** | Trace parent POM inheritance chains (`trace_ancestors.py` and `maven_extractor.py`) to recommend minimal-impact upgrades or BOM exclusions for transitive vulnerabilities. |
+| **FR-9** | **Artifact and Parent-Chain Tracing** | Locate exact coordinates and show parent POM context. Do not infer a safe upgrade or vulnerability status without resolved paths and advisory evidence. |
 | **FR-10** | **Dynamic Directory Switching** | Directory-path input in the web navigation bar allowing re-scanning of directories configured under `PROJECTGRAPH_ALLOWED_ROOTS` via `POST /api/load`. |
 
 ---
@@ -37,7 +42,7 @@
 ### 2.2 Non-Functional Requirements (NFR)
 
 * **NFR-1 (Non-Blocking Concurrency)**: Heavy subprocess calls (`mvn dependency:tree`) and disk walks must execute in Starlette threadpools (`run_in_threadpool`) so the FastAPI event loop remains responsive.
-* **NFR-2 (Deterministic Caching)**: Disk-based caching keyed by `SHA-256(pom_path)` and file modification timestamps (`mtime`). Subsequent page reloads load instantly from cache unless explicitly refreshed.
+* **NFR-2 (Deterministic Caching)**: Disk cache keys are path-based, while compatibility requires the cache schema, Maven command/version, age, POM/configuration content fingerprint, and Maven settings fingerprint to match. Explicit reload always bypasses cache.
 * **NFR-3 (Recursion Safety & Cycle Breaking)**: Graph and POM classification logic must be provably acyclic-safe through visited tracking and memoization.
 * **NFR-4 (Security & Path Sanitization)**: `/api/load` accepts only normalized absolute directories inside `PROJECTGRAPH_ALLOWED_ROOTS` (path-separator-delimited; defaults to the application directory). Symlinks are resolved before the boundary check. Subprocess execution in `maven_runner.py` must avoid `shell=True`.
 * **NFR-5 (Modern Visual Ergonomics)**: High-contrast dark theme (`#0f1117`), fluid responsive typography, badge indicators for scopes and conflicts, and smooth CSS transitions.
@@ -55,7 +60,7 @@ projectgraph/
 ├── maven_runner.py            # Subprocess mvn exec, DOT graph parsing, disk cache orchestration
 ├── graph_model.py             # Domain models (GraphModel, Module, TreeNode, Conflict)
 ├── neo4j_export.py            # Cypher script generation (MERGE :Artifact, MERGE :DEPENDS_ON)
-├── maven_extractor.py         # Standalone CLI extractor (Markdown/JSON output, vulnerability analysis)
+├── maven_extractor.py         # Standalone static extractor and artifact locator
 ├── trace_ancestors.py         # Ancestral POM parent chain tracer for transitive dependencies
 ├── templates/                 # Jinja2 HTML templates
 │   ├── base.html              # Shell layout, theme styles, live folder loader
@@ -105,7 +110,7 @@ Parses `pom.xml` using `xml.etree.ElementTree` without XML namespace prefixes (h
 > **Recursion Safety Guard**: All classification checks pass `_memo: Dict` and `_visiting: Set`. Cyclic or self-referential parent/usage checks instantly short-circuit with `("Other Module", "cycle detected")`.
 
 #### C. Maven DOT Execution & Tree Rebuilder (`maven_runner.py`)
-1. Executes `mvn dependency:tree -DoutputType=dot -DoutputFile=<tmp_file> -q` inside each POM directory.
+1. Executes `mvn --non-recursive dependency:tree -DoutputType=dot -DoutputFile=<tmp_file> -q` inside each POM directory.
 2. Parses DOT output using regex:
    - Matches digraph header: `digraph "groupId:artifactId:type:version" {` to identify root.
    - Matches directed edges: `"src" -> "dst"`.
@@ -280,18 +285,17 @@ python maven_extractor.py /path/to/java/projects -o output_base -f both
 - `-f, --format`: Output format: `markdown`, `json`, or `both` (default: `markdown`).
 - `-v, --verbose`: Enable verbose logging during scanning.
 
-#### B. Ancestral Vulnerability Tracing (`trace_ancestors.py`)
-Identifies which parent POMs introduce a vulnerable dependency and determines the exact minimal-impact fix:
+#### B. Artifact and Parent-Chain Tracing (`trace_ancestors.py`)
+Shows static parent-chain context for an exact artifact. It does not discover
+vulnerabilities or determine a safe remediation:
 ```bash
-python trace_ancestors.py -i analysis.json -v org.yaml:snakeyaml:1.33
+python trace_ancestors.py -i analysis.json --artifact org.yaml:snakeyaml:1.33
 ```
 
 **Output provided:**
 - Total occurrences, split by direct vs. transitive.
 - Complete parent inheritance POM chain (file paths and coordinates).
-- Prescriptive remediation recommendations:
-  - **Option 1**: Direct version upgrade on bringer modules.
-  - **Option 2**: Root BOM `<dependencyManagement>` exclusion / override block.
+- An explicit warning that static evidence cannot establish a safe version change.
 
 ---
 
@@ -313,17 +317,12 @@ python trace_ancestors.py -i analysis.json -v org.yaml:snakeyaml:1.33
 ## 6. Verification & Automated Testing
 
 ### 6.1 Running E2E Test Suite
-The end-to-end test suite validates full UI functionality across routing, DOM node rendering, live search, expand/collapse toggles, and view transitions:
+The complete regression command runs unit tests, starts the application on an
+available local port, waits for an explicit render-complete marker, runs the
+browser suite, and shuts the test server down:
 
 ```bash
-# Run tests headlessly
-npx playwright test test_projects/__e2e__/ui_tests.spec.js
-
-# Run tests with visual browser UI
-npx playwright test test_projects/__e2e__/ui_tests.spec.js --headed
-
-# View detailed HTML test report
-npx playwright show-report
+npm test
 ```
 
 ### 6.2 Python Code Health & Compilation Check

@@ -24,6 +24,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
+from graph_model import SCAN_SCHEMA_VERSION
 
 # ----------------------------------------------------------------------
 # Data Models
@@ -486,6 +487,7 @@ class MavenScanner:
         # Build analysis
         analyses = []
         classifier = ProjectClassifier()
+        classification_memo = {}
 
         for pom in self.poms:
             # Find matching DOT file
@@ -493,7 +495,9 @@ class MavenScanner:
             dot_deps = parse_dot_file(dot_file) if dot_file else []
 
             # Classify
-            project_type, reason = classifier.classify(pom, self.poms)
+            project_type, reason = classifier.classify(
+                pom, self.poms, _memo=classification_memo, _visiting=set()
+            )
 
             analysis = ProjectAnalysis(
                 pom=pom,
@@ -892,10 +896,14 @@ class JSONExporter:
     def export(self) -> dict:
         """Export all analysis data as JSON-serializable dict."""
         return {
+            "schema_version": SCAN_SCHEMA_VERSION,
             "metadata": {
                 "generated_at": datetime.now().isoformat(),
                 "root_directory": self._root_dir(),
+                "root": self._root_dir(),
                 "total_projects": len(self.analyses),
+                "source": "pom-static",
+                "completeness": "partial",
             },
             "projects": [self._project_to_dict(a) for a in self.analyses],
         }
@@ -1009,10 +1017,11 @@ Examples:
         help="Verbose logging"
     )
     parser.add_argument(
-        "--analyze-vulnerability",
+        "--locate-artifact", "--analyze-vulnerability",
+        dest="locate_artifact",
         nargs=2,
         metavar=("GROUPID:ARTIFACT", "VERSION"),
-        help="Analyze a vulnerable artifact: groupId:artifactId and version"
+        help="Locate an exact artifact coordinate and report declared usage"
     )
     args = parser.parse_args()
 
@@ -1053,29 +1062,35 @@ Examples:
     for t, c in sorted(type_counts.items()):
         print(f"    {t}: {c}")
 
-    if args.analyze_vulnerability:
-        target_ga, target_ver = args.analyze_vulnerability
+    if "--analyze-vulnerability" in sys.argv:
+        print(
+            "Warning: --analyze-vulnerability is deprecated; use "
+            "--locate-artifact. This command does not discover vulnerabilities.",
+            file=sys.stderr,
+        )
+    if args.locate_artifact:
+        target_ga, target_ver = args.locate_artifact
         print()
-        vuln_res = analyze_vulnerability(analyses, target_ga, target_ver)
-        print(vuln_res["recommendation"])
+        result = locate_artifact(analyses, target_ga, target_ver)
+        print(result["recommendation"])
 
 # ----------------------------------------------------------------------
 # Vulnerability Analysis
 # ----------------------------------------------------------------------
 
-def analyze_vulnerability(analyses, target_ga, target_version):
+def locate_artifact(analyses, target_ga, target_version):
     """
-    Analyze a vulnerable Maven artifact and recommend minimal impact fix.
+    Locate a Maven artifact in static POM declarations.
 
     Args:
         analyses: List of ProjectAnalysis objects
-        target_ga: groupId:artifactId of the vulnerable jar
-        target_version: The vulnerable version
+        target_ga: groupId:artifactId to locate
+        target_version: version to locate
 
     Returns:
-        Dictionary with analysis results and recommended fix
+        Dictionary with declared and managed occurrences
     """
-    # Collect all occurrences of the vulnerable artifact
+    # Collect static declarations. dependencyManagement is not transitive usage.
     occurrences = []  # list of {module_coord, version, scope, is_direct, path}
     direct_bringers = set()  # module coords that directly declare it
 
@@ -1109,7 +1124,7 @@ def analyze_vulnerability(analyses, target_ga, target_version):
     # Determine the analysis
     total_occurrences = len(occurrences)
     direct_occurrences = sum(1 for o in occurrences if o['is_direct'])
-    transitive_occurrences = total_occurrences - direct_occurrences
+    managed_occurrences = total_occurrences - direct_occurrences
 
     # Find alternative versions (if any)
     alternative_versions = set()
@@ -1118,57 +1133,44 @@ def analyze_vulnerability(analyses, target_ga, target_version):
             alternative_versions.add(o['version'])
 
     # Determine recommendation
-    recommendation_parts = [f"VULNERABILITY ANALYSIS RESULTS"]
+    recommendation_parts = ["ARTIFACT LOCATION RESULTS (STATIC/PARTIAL)"]
     recommendation_parts.append(f"Target: {target_ga}:{target_version}")
     recommendation_parts.append(f"Total occurrences: {total_occurrences}")
-    recommendation_parts.append(f"  - Direct dependencies: {direct_occurrences}")
-    recommendation_parts.append(f"  - Transitive dependencies: {transitive_occurrences}")
+    recommendation_parts.append(f"  - Direct declarations: {direct_occurrences}")
+    recommendation_parts.append(f"  - Managed declarations: {managed_occurrences}")
     if alternative_versions:
         recommendation_parts.append(f"Alternative versions found: {', '.join(sorted(alternative_versions))}")
     else:
         recommendation_parts.append("No alternative versions detected in the project")
 
-    recommendation_parts.append("")
-    recommendation_parts.append("RECOMMENDATION: Minimal Impact Change")
-
     if direct_bringers:
         recommendation_parts.append("")
-        recommendation_parts.append("Option 1 - Upgrade direct dependency:")
-        recommendation_parts.append(f"  The vulnerable jar is brought in by direct dependency/ies: {', '.join(sorted(direct_bringers))}")
-        recommendation_parts.append("  Suggested action: Upgrade the direct dependency to a version that excludes this vulnerability or contains the fix.")
-        recommendation_parts.append("")
-        recommendation_parts.append("Option 2 - BOM exclusion:")
-        recommendation_parts.append("  If using a BOM, add the vulnerable artifact to the exclusion list:")
-        recommendation_parts.append("  <dependencyManagement>")
-        recommendation_parts.append("    <dependencies>")
-        rec_ga = target_ga.split(':')
-        rec_gaid = rec_ga[1] if len(rec_ga) > 1 else 'artifact'
-        rec_ga_ver = target_version if target_version else 'LATEST'
-        recommendation_parts.append(f"        <groupId>{rec_ga[0]}</groupId>")
-        recommendation_parts.append(f"        <artifactId>{rec_gaid}</artifactId>")
-        recommendation_parts.append(f"        <version>{rec_ga_ver}</version>")
-        recommendation_parts.append("        <scope>compile</scope>")
-        recommendation_parts.append("      </dependency>")
-        recommendation_parts.append("    </dependencies>")
-        recommendation_parts.append("  </dependencyManagement>")
-    else:
-        recommendation_parts.append("")
-        recommendation_parts.append("The vulnerable jar only appears as a transitive dependency. Recommended approach:")
-        recommendation_parts.append("1. Upgrade the direct parent dependency version that brings it in")
-        recommendation_parts.append("2. Or explicitly declare the jar as a direct dependency with a fixed version under BOM")
+        recommendation_parts.append(
+            "Directly declared by: " + ", ".join(sorted(direct_bringers))
+        )
 
     recommendation_parts.append("")
+    recommendation_parts.append(
+        "This static report cannot prove resolved transitive usage or recommend "
+        "a safe version change. Use a completed Maven-resolved scan."
+    )
     recommendation = "\n".join(recommendation_parts)
 
     return {
         'target': f"{target_ga}:{target_version}",
         'total_occurrences': total_occurrences,
         'direct_occurrences': direct_occurrences,
-        'transitive_occurrences': transitive_occurrences,
+        'managed_occurrences': managed_occurrences,
+        'transitive_occurrences': 0,
         'alternative_versions': sorted(alternative_versions),
         'direct_bringers': sorted(direct_bringers),
         'recommendation': recommendation
     }
+
+
+def analyze_vulnerability(analyses, target_ga, target_version):
+    """Deprecated compatibility wrapper; no advisory lookup is performed."""
+    return locate_artifact(analyses, target_ga, target_version)
 
 
 def _trace_parent_chain(analyses, module_coord, max_depth=5):

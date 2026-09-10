@@ -42,16 +42,24 @@ def export_cypher(model: GraphModel) -> str:
 
     lines.append("")
     # Edges
-    seen_edges: set[tuple[str, str, str]] = set()
+    seen_edges: set[tuple[str, str, str, str]] = set()
     for e in model.all_edges():
-        edge_key = (e['from_id'], e['to_id'], e.get('scope', 'compile'))
+        edge_key = (
+            e['from_id'], e['to_id'], e.get('scope', 'compile'),
+            e.get('module_id', ''),
+        )
         if edge_key in seen_edges:
             continue
         seen_edges.add(edge_key)
         lines.append(
             f"MATCH (s:Artifact {{id: '{_esc(e['from_id'])}'}}), "
             f"(t:Artifact {{id: '{_esc(e['to_id'])}'}}) "
-            f"MERGE (s)-[:DEPENDS_ON {{scope: '{_esc(e['scope'])}'}}]->(t);"
+            f"MERGE (s)-[:DEPENDS_ON {{"
+            f"scope: '{_esc(e['scope'])}', "
+            f"moduleId: '{_esc(e.get('module_id', ''))}', "
+            f"depth: {int(e.get('depth', 0))}, "
+            f"direct: {str(bool(e.get('direct', False))).lower()}"
+            f"}}]->(t);"
         )
 
     return "\n".join(lines) + "\n"

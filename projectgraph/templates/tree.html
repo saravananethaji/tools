@@ -14,11 +14,13 @@
 <div id="modules">
   {% for m in modules %}
   <div class="card module-card">
-    <div class="module-head" onclick="toggleModule(this)">
+    <div class="module-head{% if m.error %} err{% endif %}" onclick="toggleModule(this)">
       <span class="caret">▶</span>
       <span class="module-title">{{ m.display }}
         <span class="version-pill">{{ m.version }}</span>
         <span class="scope-pill">{{ m.project_type }}</span>
+        <span class="scope-pill">{{ m.analysis_status }}</span>
+        {% if m.cache_state != "none" %}<span class="scope-pill">{{ m.cache_state }}</span>{% endif %}
         {% if m.error %}<span class="scope-pill err">error</span>{% endif %}
       </span>
       <span class="small" style="margin-left:auto">{{ m.pom_path }}</span>
@@ -26,7 +28,7 @@
     {% if m.error %}
       <div class="err-box"><b>mvn error:</b> {{ m.error }}</div>
     {% else %}
-      <div class="tree-body hidden" style="display:none; padding-top:.5rem;">
+      <div class="tree-body hidden" data-module-index="{{ loop.index0 }}" style="display:none; padding-top:.5rem;">
         <ul class="tree root" id="tree-{{ loop.index0 }}"></ul>
       </div>
     {% endif %}
@@ -201,13 +203,19 @@ function toggleAll(expanded) {
 
 function buildAll(query) {
   const trees = document.querySelectorAll('.tree-body');
-  trees.forEach((body, i) => {
+  trees.forEach((body) => {
     if (!body) return;
     const ul = body.querySelector('ul');
     ul.innerHTML = '';
-    const m = MODULES[i];
+    const m = MODULES[Number(body.dataset.moduleIndex)];
     if (m.tree) {
       renderTree(ul, m.tree, query);
+      if (!m.tree.children || m.tree.children.length === 0) {
+        const empty = document.createElement('li');
+        empty.className = 'small';
+        empty.textContent = 'No resolved library dependencies';
+        ul.appendChild(empty);
+      }
       // if searching, auto-open
       if (query) body.style.display = '';
     }
@@ -234,6 +242,7 @@ window.addEventListener('DOMContentLoaded', () => {
   // expand the first non-error module
   const first = document.querySelector('.module-head:not(.err)');
   if (first) toggleModule(first);
+  document.querySelector('main').dataset.rendered = 'true';
 });
 </script>
 {% endblock %}

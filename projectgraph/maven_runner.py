@@ -1,8 +1,9 @@
 """Maven runner: find poms, run `mvn dependency:tree -DoutputType=dot`,
 parse the DOT output into a tree, and keep an on-disk JSON cache.
 
-Cache is keyed by pom path + file mtime. On explicit reload, Maven is
-re-run and the cache refreshed.
+Cache files are keyed by POM path. Compatibility additionally requires the
+cache schema, Maven command/version, age, and local Maven-input fingerprint to
+match. On explicit reload, Maven is re-run and the cache refreshed.
 """
 
 from __future__ import annotations
@@ -14,6 +15,8 @@ import re
 import subprocess
 import sys
 import hashlib
+import time
+import uuid
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -48,6 +51,23 @@ logger = logging.getLogger("projectgraph")
 
 _EDGE_RE = re.compile(r'"([^"]+)"\s*->\s*"([^"]+)"')
 _DIGRAPH_RE = re.compile(r'digraph\s*"([^"]+)"')
+CACHE_SCHEMA_VERSION = 2
+MAVEN_COMMAND_SIGNATURE = "mvn --non-recursive dependency:tree -DoutputType=dot -q"
+DEFAULT_CACHE_MAX_AGE_SECONDS = 86400
+
+
+def _same_gav(left: dict, root_coord_id: str) -> bool:
+    parts = root_coord_id.split(":")
+    if (
+        len(parts) < 3
+        or left.get("groupId") != parts[0]
+        or left.get("artifactId") != parts[1]
+    ):
+        return False
+    # CI-friendly Maven versions commonly use ${revision}. Maven's DOT root is
+    # the effective value and should replace that placeholder after parsing.
+    expected_version = parts[2]
+    return "${" in expected_version or left.get("version") == expected_version
 
 
 def parse_dot_to_tree(dot_text: str, root_coord_id: str) -> Optional[TreeNode]:
@@ -65,6 +85,12 @@ def parse_dot_to_tree(dot_text: str, root_coord_id: str) -> Optional[TreeNode]:
     dm = _DIGRAPH_RE.search(dot_text)
     if dm:
         root_parsed = parse_maven_coordinate(dm.group(1))
+        if not _same_gav(root_parsed, root_coord_id):
+            logger.error(
+                "  DOT root mismatch: requested %s but Maven produced %s",
+                root_coord_id, root_parsed["id"],
+            )
+            return None
         node_meta[root_parsed["id"]] = root_parsed
         root_graph_id = root_parsed["id"]
 
@@ -146,7 +172,10 @@ def run_mvn_dependency_tree(pom_dir: str) -> Tuple[bool, str, str]:
         os.remove(dot_path)
     except OSError:
         pass
-    cmd = ["mvn", "dependency:tree", "-DoutputType=dot",
+    # Each discovered POM is analysed independently.  Without --non-recursive,
+    # an aggregator POM builds its entire reactor and every module writes to the
+    # same output file; the last module then overwrites the graph we requested.
+    cmd = ["mvn", "--non-recursive", "dependency:tree", "-DoutputType=dot",
            f"-DoutputFile={dot_path}", "-q"]
     
     # Resolve mvn executable path (avoids shell=True)
@@ -221,6 +250,68 @@ def save_cache(cache_dir: str, pom_path: str, data: dict) -> None:
         json.dump(data, f)
 
 
+def _maven_version() -> str:
+    import shutil
+
+    executable = shutil.which("mvn.cmd" if os.name == "nt" else "mvn")
+    if not executable:
+        return "unavailable"
+    try:
+        proc = subprocess.run(
+            [executable, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            shell=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return "unknown"
+    first_line = (proc.stdout or proc.stderr or "").splitlines()
+    return first_line[0].strip() if first_line else "unknown"
+
+
+def _scan_input_fingerprint(root_dir: str, pom_paths: List[str]) -> str:
+    """Conservative cache input hash for Maven model-affecting local files."""
+    digest = hashlib.sha256()
+    candidates = {Path(path).resolve() for path in pom_paths}
+    root = Path(root_dir).resolve()
+    for relative in (".mvn/maven.config", ".mvn/jvm.config", ".mvn/extensions.xml"):
+        path = root / relative
+        if path.is_file():
+            candidates.add(path)
+    settings = Path.home() / ".m2" / "settings.xml"
+    if settings.is_file():
+        candidates.add(settings)
+    for path in sorted(candidates, key=str):
+        digest.update(str(path).encode("utf-8"))
+        try:
+            digest.update(path.read_bytes())
+        except OSError:
+            digest.update(b"<unreadable>")
+    digest.update(os.environ.get("MAVEN_OPTS", "").encode("utf-8"))
+    digest.update(MAVEN_COMMAND_SIGNATURE.encode("utf-8"))
+    return digest.hexdigest()
+
+
+def _cache_is_compatible(cache: dict, fingerprint: str, maven_version: str) -> bool:
+    try:
+        max_age = int(os.environ.get(
+            "PROJECTGRAPH_CACHE_MAX_AGE_SECONDS",
+            str(DEFAULT_CACHE_MAX_AGE_SECONDS),
+        ))
+    except ValueError:
+        max_age = DEFAULT_CACHE_MAX_AGE_SECONDS
+    age = time.time() - float(cache.get("created_at", 0))
+    return (
+        cache.get("cache_schema_version") == CACHE_SCHEMA_VERSION
+        and cache.get("command_signature") == MAVEN_COMMAND_SIGNATURE
+        and cache.get("input_fingerprint") == fingerprint
+        and cache.get("maven_version") == maven_version
+        and cache.get("analysis_status") in {"resolved", "empty"}
+        and 0 <= age <= max_age
+    )
+
+
 # ----------------------------------------------------------------------
 # Orchestration
 # ----------------------------------------------------------------------
@@ -232,11 +323,12 @@ def build_model(root_dir: str, cache_dir: str,
     if force_reload:
         logger.info("Force reload enabled - bypassing cache")
 
-    model = GraphModel()
+    model = GraphModel(root=str(Path(root_dir).resolve()), scan_id=str(uuid.uuid4()))
     
     # Use shared parser to find and parse all POMs
     pom_infos = []
-    for pom_path in find_poms(root_dir):
+    pom_paths = list(find_poms(root_dir))
+    for pom_path in pom_paths:
         pom = parse_pom(pom_path)
         if pom:
             pom_infos.append(pom)
@@ -245,11 +337,17 @@ def build_model(root_dir: str, cache_dir: str,
         logger.warning("No pom.xml files found!")
         return model
 
+    maven_version = _maven_version()
+    input_fingerprint = _scan_input_fingerprint(root_dir, [p.path for p in pom_infos])
+
     # Classify all projects first (needed for dependency analysis)
     classifier = ProjectClassifier()
     project_types = {}
+    classification_memo = {}
     for pom in pom_infos:
-        ptype, reason = classifier.classify(pom, pom_infos)
+        ptype, reason = classifier.classify(
+            pom, pom_infos, _memo=classification_memo, _visiting=set()
+        )
         project_types[pom.path] = (ptype, reason)
         logger.info(f"  Classified {pom.coord} as: {ptype} ({reason})")
 
@@ -258,8 +356,6 @@ def build_model(root_dir: str, cache_dir: str,
         logger.info(f"[{i}/{total}] Processing: {pom.path}")
         logger.info(f"  Coordinates: {pom.coord}")
         pom_dir = pom.directory
-        mtime = os.path.getmtime(pom.path)
-
         cached = None if force_reload else load_cache(cache_dir, pom.path)
 
         project_type, classification_reason = project_types[pom.path]
@@ -267,9 +363,10 @@ def build_model(root_dir: str, cache_dir: str,
             pom_path=pom.path, dir_path=pom_dir,
             coord_id=pom.coord, groupId=pom.groupId, artifactId=pom.artifactId, version=pom.version,
             project_type=project_type, classification_reason=classification_reason,
+            maven_version=maven_version,
         )
 
-        if cached and cached.get("mtime") == mtime:
+        if cached and _cache_is_compatible(cached, input_fingerprint, maven_version):
             # use cached tree
             logger.info("  Using cached dependency tree")
             tree_dict = cached.get("tree")
@@ -277,25 +374,58 @@ def build_model(root_dir: str, cache_dir: str,
                 from graph_model import _tree_from_dict
                 module.tree = _tree_from_dict(tree_dict)
             module.error = cached.get("error")
+            module.analysis_status = cached.get("analysis_status", "error" if module.error else "resolved")
+            module.completeness = cached.get("completeness", "partial" if module.error else "complete")
+            module.dependency_count = cached.get(
+                "dependency_count",
+                max(0, _count_tree_nodes(module.tree) - 1) if module.tree else 0,
+            )
+            module.cache_state = "cached"
         else:
+            if cached:
+                logger.info("  Ignoring stale or incompatible cache entry")
             logger.info("  Running Maven dependency analysis...")
             ok, dot, err = run_mvn_dependency_tree(pom_dir)
             if ok:
                 module.tree = parse_dot_to_tree(dot, module.coord_id)
                 if module.tree is None:
-                    module.error = "Root module not found in DOT output"
+                    module.error = "Maven DOT root does not match requested POM"
+                    module.analysis_status = "parse_error"
+                    module.completeness = "partial"
                     logger.error(f"  {module.error}")
                 else:
-                    dep_count = _count_tree_nodes(module.tree)
-                    logger.info(f"  Parsed {dep_count} dependencies")
+                    # Do not report the project root itself as a dependency.
+                    module.dependency_count = _count_tree_nodes(module.tree) - 1
+                    module.analysis_status = "empty" if module.dependency_count == 0 else "resolved"
+                    module.completeness = "complete"
+                    logger.info(f"  Parsed {module.dependency_count} dependencies")
             else:
                 module.error = err
+                module.analysis_status = "timeout" if "timed out" in err.lower() else "maven_error"
+                module.completeness = "partial"
                 logger.error(f"  Maven error: {err}")
+            module.cache_state = "stale-refreshed" if cached else "fresh"
             save_cache(cache_dir, pom.path, {
-                "mtime": mtime,
+                "cache_schema_version": CACHE_SCHEMA_VERSION,
+                "command_signature": MAVEN_COMMAND_SIGNATURE,
+                "input_fingerprint": input_fingerprint,
+                "maven_version": maven_version,
+                "created_at": time.time(),
                 "tree": module.tree.to_dict() if module.tree else None,
                 "error": module.error,
+                "analysis_status": module.analysis_status,
+                "completeness": module.completeness,
+                "dependency_count": module.dependency_count,
             })
+
+        if module.tree:
+            # Maven's graph contains the effective project version; prefer it
+            # over an unresolved static-POM placeholder for fresh and cached
+            # results alike.
+            module.groupId = module.tree.groupId
+            module.artifactId = module.tree.artifactId
+            module.version = module.tree.version
+            module.coord_id = f"{module.groupId}:{module.artifactId}:{module.version}"
 
         model.add_module(module)
 

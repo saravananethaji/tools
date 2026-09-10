@@ -1,23 +1,25 @@
 #!/usr/bin/env python3
 """
-Ancestral Tracing Script for Maven Vulnerability Analysis
+Ancestral Tracing Script for Maven Artifact Location
 
 Reads the JSON output from maven_extractor.py and traces the parent POM chain
-for each module that has the vulnerable artifact as a transitive dependency.
+for each module that contains an exact artifact as a resolved dependency.
 
 Usage:
-    python trace_ancestors.py -i analysis.json -v org:vuln-lib:1.0.0
+    python trace_ancestors.py -i analysis.json --artifact org:library:1.0.0
 
 The script will output:
-- Which modules have the vulnerable artifact as a transitive dependency
-- The full parent chain for each module (pom.xml path + version to change)
-- Recommendations for minimal impact fix
+- Which modules contain the artifact as a transitive dependency
+- The parent chain for each module as contextual evidence
+- A warning that static evidence cannot determine a safe remediation
 """
 
 import json
 import os
 import sys
 from collections import defaultdict
+
+from graph_model import SCAN_SCHEMA_VERSION, parse_maven_coordinate as parse_resolved_coordinate
 
 
 def parse_maven_coord(coord_str):
@@ -31,6 +33,18 @@ def parse_maven_coord(coord_str):
             'version': parts[-1]
         }
     return None
+
+
+def _coord_matches(coord_str, target_ga, target_version):
+    parsed = parse_resolved_coordinate(coord_str)
+    if not parsed:
+        return False
+    ga = f"{parsed['groupId']}:{parsed['artifactId']}"
+    return ga == target_ga and (
+        not target_version
+        or target_version == "unknown"
+        or parsed["version"] == target_version
+    )
 
 
 def _get_project_coord(project_dict):
@@ -116,14 +130,14 @@ def trace_parent_chain(analyses, module_coord, max_depth=5):
     return chain
 
 
-def analyze_vulnerability_ancestors(json_data, target_ga, target_version):
+def trace_artifact_ancestors(json_data, target_ga, target_version):
     """
-    Analyze a vulnerable artifact and trace ancestral chains.
+    Locate an exact artifact and trace ancestral chains.
 
     Args:
         json_data: The JSON dict from maven_extractor.py
-        target_ga: groupId:artifactId of the vulnerable jar
-        target_version: The vulnerable version
+        target_ga: groupId:artifactId to locate
+        target_version: version to locate
 
     Returns:
         Dictionary with analysis results and ancestral chains
@@ -146,7 +160,7 @@ def analyze_vulnerability_ancestors(json_data, target_ga, target_version):
         dot_deps = a.get('dot_dependencies') or []
         for d in dot_deps:
             to_coord = d.get('to', '')
-            if target_ga in to_coord and (not target_version or target_version in to_coord):
+            if _coord_matches(to_coord, target_ga, target_version):
                 has_transitive = True
 
         # If transitive and not direct, record it
@@ -174,16 +188,27 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Trace ancestral POM chains for Maven vulnerability analysis"
+        description="Trace ancestral POM chains for an exact Maven artifact"
     )
     parser.add_argument("-i", "--input", required=True, help="Path to JSON file from maven_extractor.py")
-    parser.add_argument("-v", "--vulnerable", required=True, help="Vulnerable artifact: groupId:artifactId:version")
+    parser.add_argument(
+        "-a", "--artifact", "-v", "--vulnerable",
+        dest="artifact",
+        required=True,
+        help="Artifact coordinate: groupId:artifactId:version",
+    )
     parser.add_argument("-o", "--output", help="Output file for results (default: stdout)")
 
     args = parser.parse_args()
 
-    # Parse vulnerable artifact
-    parts = args.vulnerable.split(":")
+    # Parse exact artifact coordinate.
+    if "--vulnerable" in sys.argv:
+        print(
+            "Warning: --vulnerable is deprecated; use --artifact. "
+            "This command does not discover vulnerabilities.",
+            file=sys.stderr,
+        )
+    parts = args.artifact.split(":")
     if len(parts) < 2:
         print("Error: Vulnerable artifact must be in format groupId:artifactId:version")
         sys.exit(1)
@@ -201,21 +226,24 @@ def main():
     except json.JSONDecodeError:
         print("Error: Invalid JSON file")
         sys.exit(1)
+    if json_data.get("schema_version") != SCAN_SCHEMA_VERSION:
+        print(f"Error: Unsupported JSON schema; expected {SCAN_SCHEMA_VERSION}")
+        sys.exit(1)
 
     # Run ancestral tracing
-    print(f"=== VULNERABILITY ANCESTRAL TRACE ===")
+    print("=== ARTIFACT ANCESTRAL TRACE (STATIC/PARTIAL) ===")
     print(f"Target: {target_ga}:{target_version}")
     print(f"Input file: {args.input}")
     print()
 
-    ancestral_info = analyze_vulnerability_ancestors(json_data, target_ga, target_version)
+    ancestral_info = trace_artifact_ancestors(json_data, target_ga, target_version)
 
     if not ancestral_info:
-        print("No modules found with the vulnerable artifact as a transitive dependency.")
+        print("No modules found with the artifact as a transitive dependency.")
         print("The artifact may be a direct dependency or not present in the project.")
         return
 
-    print(f"Found {len(ancestral_info)} module(s) with the vulnerable artifact as a transitive dependency:")
+    print(f"Found {len(ancestral_info)} module(s) with the artifact as a transitive dependency:")
     print()
 
     for info in ancestral_info:
@@ -230,9 +258,9 @@ def main():
 
         print()
 
-    # Provide recommendations
+    # Report evidence only. A parent chain alone does not identify a safe fix.
     print("=" * 60)
-    print("RECOMMENDATIONS:")
+    print("PARENT-CHAIN EVIDENCE:")
     print("=" * 60)
 
     for info in ancestral_info:
@@ -243,13 +271,8 @@ def main():
             print(f"Module {info['module_coord']}: No parent chain found - this is likely a root project or has no parent POM.")
             continue
 
-        # The deepest (last) parent is the ancestor to upgrade
-        last_parent = chain[-1]
         print(f"Module: {info['module_name']}")
-        print(f"  To fix the vulnerability, upgrade the parent POM:")
-        print(f"  - Version: {last_parent['version']}")
-        print(f"  - POM Path: {last_parent['pom_path']}")
-        print(f"  - Relative Path: {last_parent.get('relative_path', 'N/A')}")
+        print("  Parent chain is context only; it is not a remediation target.")
         print()
 
     # Also provide the original analysis summary
@@ -269,32 +292,25 @@ def main():
         dot_deps = a.get('dot_dependencies') or []
         for d in dot_deps:
             to_coord = d.get('to', '')
-            if target_ga in to_coord and (not target_version or target_version in to_coord):
+            if _coord_matches(to_coord, target_ga, target_version):
                 transitive_occurrences += 1
                 total_occurrences += 1
 
     print("=" * 60)
-    print("ORIGINAL VULNERABILITY ANALYSIS SUMMARY:")
+    print("ARTIFACT LOCATION SUMMARY (STATIC/PARTIAL):")
     print(f"Target: {target_ga}:{target_version}")
     print(f"Total occurrences: {total_occurrences}")
     print(f"  - Direct dependencies: {direct_occurrences}")
     print(f"  - Transitive dependencies: {transitive_occurrences}")
 
-    # Provide final recommendation
     print()
-    print("FINAL RECOMMENDATION:")
-    if transitive_occurrences > 0 and ancestral_info:
-        print("The vulnerable artifact appears as a transitive dependency.")
-        print("Recommended action: Upgrade the parent POM version shown above")
-        print("for the module(s) that have this artifact as a transitive dependency.")
-        print("Alternatively, declare the artifact as a direct dependency")
-        print("under BOM with the fixed version.")
-    elif direct_occurrences > 0:
-        print("The vulnerable artifact appears as a direct dependency.")
-        print("Recommended action: Upgrade the direct dependency version")
-        print("or add BOM exclusion to manage the version.")
-    else:
+    if total_occurrences == 0:
         print("The artifact was not found in the project dependencies.")
+    else:
+        print(
+            "No remediation is inferred from this static report. Confirm the "
+            "resolved path and advisory/fixed-version evidence first."
+        )
 
 
 if __name__ == "__main__":

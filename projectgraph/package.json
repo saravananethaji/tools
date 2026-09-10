@@ -4,7 +4,7 @@
   "description": "A Python (FastAPI) app that scans a folder of Java/Maven projects, runs `mvn dependency:tree -DoutputType=dot` per pom, and presents an interactive dependency graph with 4 capabilities:",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "python tests/run_all.py"
   },
   "keywords": [],
   "author": "",

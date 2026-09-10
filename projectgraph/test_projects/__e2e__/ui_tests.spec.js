@@ -5,7 +5,7 @@
 
 const { test, expect } = require('@playwright/test');
 
-const BASE_URL = 'http://127.0.0.1:8000';
+const BASE_URL = process.env.PROJECTGRAPH_TEST_URL || 'http://127.0.0.1:8000';
 
 test.describe('Maven Project Graph - UI Tests', () => {
   test('page title and load', async ({ page }) => {
@@ -20,6 +20,7 @@ test.describe('Maven Project Graph - UI Tests', () => {
     await page.goto(`${BASE_URL}/tree`);
     // Wait for network to settle
     await page.waitForLoadState('networkidle');
+    await page.locator('main[data-rendered="true"]').waitFor();
     // Wait for module cards to appear
     await page.waitForSelector('.module-card', { state: 'visible', timeout: 15000 });
     // Check that we have modules
@@ -34,7 +35,6 @@ test.describe('Maven Project Graph - UI Tests', () => {
     await page.waitForSelector('.module-card', { state: 'visible', timeout: 15000 });
     // Search for a specific module
     await page.fill('input#search', 'order-service');
-    await page.waitForTimeout(1000);
     // Check that we have matching modules
     const matchCount = await page.locator('.node.match').count();
     console.log(`Found ${matchCount} matching modules`);
@@ -65,7 +65,6 @@ test.describe('Maven Project Graph - UI Tests', () => {
     await page.waitForSelector('.module-card', { state: 'visible', timeout: 15000 });
     // Click collapse all
     await page.click('button:text("Collapse All")');
-    await page.waitForTimeout(500);
     // Check that tree bodies are hidden - look for hidden class
     const bodies = page.locator('.tree-body');
     const bodyCount = await bodies.count();
@@ -78,7 +77,6 @@ test.describe('Maven Project Graph - UI Tests', () => {
     }
     // Click expand all
     await page.click('button:text("Expand All")');
-    await page.waitForTimeout(500);
     // Check that tree bodies are visible
     const visibleCount = await bodies.evaluateAll(
       els => Array.from(els).filter(el => !el.classList.contains('hidden')).length

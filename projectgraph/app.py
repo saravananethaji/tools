@@ -28,6 +28,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from maven_runner import build_model
+from graph_model import GraphModel, Module, TreeNode, SCAN_SCHEMA_VERSION
 from neo4j_export import export_cypher
 from pom_parser import parse_pom, PomInfo, Dependency, Plugin, ParentInfo
 
@@ -240,7 +241,7 @@ async def api_load(root: str = Form(...)):
 
 @app.post("/api/load-json")
 async def api_load_json(file: UploadFile = File(...)):
-    """Load a previously exported JSON analysis file from maven_extractor.py"""
+    """Load a versioned ProjectGraph scan or static-analysis export."""
     logger.info(f"Loading JSON file: {file.filename}")
     
     if not file.filename or not file.filename.endswith('.json'):
@@ -258,19 +259,63 @@ async def api_load_json(file: UploadFile = File(...)):
             detail=f"Invalid JSON: {e}"
         )
     
-    # Validate JSON structure
+    if data.get("schema_version") != SCAN_SCHEMA_VERSION:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Unsupported or missing schema_version; expected "
+                f"{SCAN_SCHEMA_VERSION}"
+            )
+        )
+
+    # A resolved scan round-trips directly through the canonical model.
+    if "modules" in data:
+        try:
+            model = GraphModel.from_dict(data)
+        except (KeyError, TypeError, ValueError) as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid scan JSON: {e}",
+            )
+        _state["model"] = model
+        _state["root"] = model.root or "loaded-from-json"
+        return JSONResponse({
+            "ok": True,
+            "modules": len(model.modules),
+            "source": model.source,
+            "completeness": model.to_dict()["metadata"]["completeness"],
+        })
+
+    # Static extractor exports use the same versioned envelope but remain
+    # explicitly partial; managed declarations are never fabricated as edges.
     if "projects" not in data:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="JSON must contain 'projects' array"
+            detail="Scan JSON must contain 'modules' or 'projects'",
         )
     
     # Convert JSON projects to GraphModel
-    from graph_model import GraphModel, Module, TreeNode
+    metadata = data.get("metadata", {})
+    model = GraphModel(
+        root=metadata.get("root") or metadata.get("root_directory"),
+        scan_id=metadata.get("scan_id"),
+        generated_at=metadata.get("generated_at"),
+        source="pom-static",
+        completeness="partial",
+    )
+
+    def dependency_from_dict(item: dict) -> Dependency:
+        return Dependency(
+            groupId=item.get("groupId", "unknown"),
+            artifactId=item.get("artifactId", "unknown"),
+            version=item.get("version"),
+            scope=item.get("scope"),
+            type=item.get("type"),
+            classifier=item.get("classifier"),
+        )
     
-    model = GraphModel()
-    
-    for p in data["projects"]:
+    import_errors = []
+    for index, p in enumerate(data["projects"]):
         try:
             coord = p["coordinates"]
             pom = PomInfo(
@@ -284,8 +329,11 @@ async def api_load_json(file: UploadFile = File(...)):
                 description=p.get("description"),
                 parent=ParentInfo(**p["parent"]) if p.get("parent") else None,
                 modules=p.get("modules", []),
-                dependencies=[Dependency(**d) for d in p.get("dependencies", [])],
-                dependency_management=[Dependency(**d) for d in p.get("dependency_management", [])],
+                dependencies=[dependency_from_dict(d) for d in p.get("dependencies", [])],
+                dependency_management=[
+                    dependency_from_dict(d)
+                    for d in p.get("dependency_management", [])
+                ],
                 plugins=[Plugin(**pl) for pl in p.get("plugins", [])],
                 properties=p.get("properties", {}),
             )
@@ -300,6 +348,10 @@ async def api_load_json(file: UploadFile = File(...)):
                 version=pom.version,
                 project_type=p.get("project_type", "Other Module"),
                 classification_reason=p.get("classification_reason", "not classified"),
+                source="pom-static",
+                completeness="partial",
+                cache_state="imported",
+                analysis_status="partial_static",
             )
             
             # If DOT dependencies exist, build tree from them
@@ -348,17 +400,38 @@ async def api_load_json(file: UploadFile = File(...)):
                         return node
                     
                     module.tree = build_path(root_id, set())
+                    def count_nodes(node):
+                        return 1 + sum(count_nodes(child) for child in node.children)
+
+                    module.dependency_count = count_nodes(module.tree) - 1
             
             model.add_module(module)
             
         except Exception as e:
-            logger.warning(f"Skipping project {p.get('coordinates', {}).get('groupId', 'unknown')}: {e}")
+            project_name = p.get("coord_id") or p.get("coordinates", {}).get("artifactId", "unknown")
+            logger.warning(f"Invalid project {project_name}: {e}")
+            import_errors.append({
+                "index": index,
+                "project": project_name,
+                "error": str(e),
+            })
             continue
+
+    if import_errors:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": "Static import rejected; no projects were loaded", "errors": import_errors},
+        )
     
     _state["model"] = model
-    _state["root"] = data.get("metadata", {}).get("root_directory", "loaded-from-json")
+    _state["root"] = model.root or "loaded-from-json"
     logger.info(f"Loaded {len(model.modules)} modules from JSON")
-    return JSONResponse({"ok": True, "modules": len(model.modules)})
+    return JSONResponse({
+        "ok": True,
+        "modules": len(model.modules),
+        "source": "pom-static",
+        "completeness": "partial",
+    })
 
 
 if __name__ == "__main__":

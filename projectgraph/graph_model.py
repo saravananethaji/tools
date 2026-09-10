@@ -7,10 +7,13 @@ trees from all modules and exposes conflict detection.
 
 from __future__ import annotations
 
-import re
 from collections import defaultdict
-from dataclasses import dataclass, field, asdict
-from typing import Dict, List, Optional, Tuple
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Dict, List, Optional
+
+
+SCAN_SCHEMA_VERSION = "projectgraph.scan.v1"
 
 
 # ----------------------------------------------------------------------
@@ -141,6 +144,12 @@ class Module:
     classification_reason: str = "not classified"
     tree: Optional[TreeNode] = None
     error: Optional[str] = None   # set if mvn failed for this module
+    analysis_status: str = "pending"
+    source: str = "maven-resolved"
+    completeness: str = "unknown"
+    cache_state: str = "none"
+    dependency_count: int = 0
+    maven_version: Optional[str] = None
 
     @property
     def display(self) -> str:
@@ -159,6 +168,12 @@ class Module:
             "display": self.display,
             "tree": self.tree.to_dict() if self.tree else None,
             "error": self.error,
+            "analysis_status": self.analysis_status,
+            "source": self.source,
+            "completeness": self.completeness,
+            "cache_state": self.cache_state,
+            "dependency_count": self.dependency_count,
+            "maven_version": self.maven_version,
         }
 
 
@@ -177,8 +192,16 @@ class Conflict:
 class GraphModel:
     """Aggregates modules + their trees; provides conflict detection."""
 
-    def __init__(self):
+    def __init__(self, *, root: Optional[str] = None, scan_id: Optional[str] = None,
+                 generated_at: Optional[str] = None,
+                 source: str = "maven-resolved",
+                 completeness: Optional[str] = None):
         self.modules: List[Module] = []
+        self.root = root
+        self.scan_id = scan_id
+        self.generated_at = generated_at or datetime.now(timezone.utc).isoformat()
+        self.source = source
+        self.completeness = completeness
 
     # --- population ---
 
@@ -208,7 +231,9 @@ class GraphModel:
 
         for m in self.modules:
             if m.tree:
-                walk(m.tree, m, set())
+                # A module's own root is context, not a resolved dependency.
+                for child in m.tree.children:
+                    walk(child, m, set())
 
         conflicts = []
         for key, versions in sorted(seen.items()):
@@ -248,9 +273,9 @@ class GraphModel:
         return list(out.values())
 
     def all_edges(self) -> List[dict]:
-        """All dependency edges (from_id -> to_id, scope)."""
+        """All dependency edges with owning-module provenance."""
         edges: List[dict] = []
-        def walk(node: TreeNode, _visited: set):
+        def walk(node: TreeNode, module: Module, depth: int, _visited: set):
             if node.artifact_id in _visited:
                 return
             _visited = _visited | {node.artifact_id}
@@ -259,21 +284,56 @@ class GraphModel:
                     "from_id": node.artifact_id,
                     "to_id": c.artifact_id,
                     "scope": c.scope,
+                    "module_id": module.coord_id,
+                    "depth": depth + 1,
+                    "direct": depth == 0,
                 })
-                walk(c, _visited)
+                walk(c, module, depth + 1, _visited)
         for m in self.modules:
             if m.tree:
-                walk(m.tree, set())
+                walk(m.tree, m, 0, set())
         return edges
 
     # --- serialization (for on-disk cache) ---
 
     def to_dict(self) -> dict:
-        return {"modules": [m.to_dict() for m in self.modules]}
+        statuses = defaultdict(int)
+        for module in self.modules:
+            statuses[module.analysis_status] += 1
+        return {
+            "schema_version": SCAN_SCHEMA_VERSION,
+            "metadata": {
+                "scan_id": self.scan_id,
+                "generated_at": self.generated_at,
+                "root": self.root,
+                "source": self.source,
+                "completeness": self.completeness or (
+                    "complete"
+                    if self.modules and all(m.completeness == "complete" for m in self.modules)
+                    else "partial"
+                ),
+                "module_count": len(self.modules),
+                "status_counts": dict(sorted(statuses.items())),
+            },
+            "modules": [m.to_dict() for m in self.modules],
+            "edges": self.all_edges(),
+        }
 
     @classmethod
     def from_dict(cls, data: dict) -> "GraphModel":
-        model = cls()
+        if data.get("schema_version") != SCAN_SCHEMA_VERSION:
+            raise ValueError(
+                f"Unsupported scan schema: {data.get('schema_version')!r}; "
+                f"expected {SCAN_SCHEMA_VERSION!r}"
+            )
+        metadata = data.get("metadata", {})
+        model = cls(
+            root=metadata.get("root"),
+            scan_id=metadata.get("scan_id"),
+            generated_at=metadata.get("generated_at"),
+            source=metadata.get("source", "maven-resolved"),
+            completeness=metadata.get("completeness"),
+        )
         for md in data.get("modules", []):
             tree = None
             if md.get("tree"):
@@ -289,6 +349,12 @@ class GraphModel:
                 classification_reason=md.get("classification_reason", "not classified"),
                 tree=tree,
                 error=md.get("error"),
+                analysis_status=md.get("analysis_status", "pending"),
+                source=md.get("source", "maven-resolved"),
+                completeness=md.get("completeness", "unknown"),
+                cache_state=md.get("cache_state", "none"),
+                dependency_count=md.get("dependency_count", 0),
+                maven_version=md.get("maven_version"),
             ))
         return model
 
