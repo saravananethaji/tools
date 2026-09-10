@@ -3,8 +3,10 @@
 Routes:
   GET  /                 -> redirect to /tree
   GET  /api/state         -> full model as JSON (modules + trees)
+  GET  /api/inventory     -> resolved OSS inventory as JSON (P1.1)
   GET  /tree              -> tree view (option 1) with search (option 3)
   GET  /conflicts         -> conflicts view (option 2)
+  GET  /inventory         -> OSS inventory view (P1.1)
   GET  /export            -> download .cypher script (option 4)
   POST  /api/reload        -> re-run Maven and refresh cache
   POST  /api/load          -> load/scan a root folder (body: {"root": "..."})
@@ -31,6 +33,7 @@ from maven_runner import build_model
 from graph_model import GraphModel, Module, TreeNode, SCAN_SCHEMA_VERSION
 from neo4j_export import export_cypher
 from pom_parser import parse_pom, PomInfo, Dependency, Plugin, ParentInfo
+from oss_inventory import build_inventory
 
 # Configure logging
 logging.basicConfig(
@@ -173,6 +176,24 @@ async def tree_view(request: Request, q: str = ""):
     return templates.TemplateResponse(request, "tree.html", {
         "modules": [m.to_dict() for m in model.modules],
         "query": q,
+        "root": _state["root"] or _default_root(),
+    })
+
+
+@app.get("/api/inventory")
+async def api_inventory():
+    """Resolved open-source inventory: external canonical coordinates by
+    consuming module, scope, and direct/transitive path."""
+    model = await _get_model()
+    return JSONResponse(build_inventory(model))
+
+
+@app.get("/inventory", response_class=HTMLResponse)
+async def inventory_view(request: Request):
+    model = await _get_model()
+    inventory = build_inventory(model)
+    return templates.TemplateResponse(request, "inventory.html", {
+        "inventory": inventory,
         "root": _state["root"] or _default_root(),
     })
 

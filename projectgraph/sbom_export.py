@@ -9,6 +9,13 @@ P0 items from DESIGN.md:
 
 Consumes the JSON produced by maven_extractor.py (-f json). Stdlib only.
 
+NOTE (P1.1): the canonical OSS inventory is the RESOLVED one —
+`oss_inventory.py`, `GET /api/inventory`, and the /inventory page — which
+describes what Maven actually resolved. This CLI operates on the offline
+static-POM export and is therefore PARTIAL: `dependencyManagement` entries and
+declared versions are not proof of resolved usage. Prefer the resolved
+inventory for any claim about what a build contains.
+
 Usage:
     # 1. Generate extractor JSON first:
     python maven_extractor.py /path/to/projects -o analysis.json -f json

@@ -25,9 +25,10 @@ projectgraph/
   static/           (reserved)
   cache/            on-disk JSON cache (auto-created)
   parser.py         (pre-existing DOT + Neo4j Bolt ingester, unchanged)
+  oss_inventory.py  resolved OSS inventory (external coords, paths, prefixes)
   maven_extractor.py offline POM extractor + coordinate-location analysis
   trace_ancestors.py parent-POM chain tracing for remediation guidance
-  sbom_export.py    OSS inventory, CycloneDX 1.5, OSV.dev, version drift
+  sbom_export.py    (offline/partial) static SBOM, OSV, version drift
   DESIGN.md         architecture, limitations, PO review, and roadmap
   TODO.md           single prioritized P0/P1/P2 implementation backlog
   requirements.txt
@@ -72,33 +73,46 @@ or use **Reload** in the UI after editing the root in `app.py`.
 - Export: every unique artifact is a `:Artifact` node; every parent->child
   edge is a `:DEPENDS_ON {scope}` relationship.
 
-## OSS inventory, SBOM, and advisory scan
+## Resolved OSS inventory (canonical)
 
-Generate the extractor JSON once, then use the standalone product-owner
-reports. The inventory treats discovered project groupIds as internal by
-default; add more prefixes with repeated `--internal-prefix` flags.
+The inventory view lists every **external** (non-internal) artifact from the
+*Maven-resolved* dependency trees, with each consuming module, its scope, its
+relationship (`direct`/`transitive`), and the actual dependency path(s) by
+which it is reached.
+
+```
+GET  /inventory         -> table view (also linked as "3 · OSS Inventory")
+GET  /api/inventory     -> the same data as JSON
+```
+
+Internal group IDs are detected from the scanned projects' own groupIds plus
+any configured prefixes:
+
+```bash
+export PROJECTGRAPH_INTERNAL_PREFIXES="com.acme,org.mycompany"
+```
+
+The inventory is honest about what it covers: only modules with a resolved
+tree contribute; unresolved modules are listed under `excluded_modules` with a
+reason (they are never silently treated as empty), and the module's own root
+node is never reported as a dependency. Path lists are bounded per consumer,
+with truncation flagged.
+
+## Offline static reports (partial)
+
+`sbom_export.py` works on the offline extractor JSON **without running
+Maven**. It is useful for quick, static triage, but because it only sees
+declared dependencies and `dependencyManagement`, its inventory and SBOM are
+**partial** and must not be treated as proof of resolved usage.
 
 ```bash
 python maven_extractor.py test_projects -o analysis.json -f json
 
-# Which open-source libraries, versions, scopes, and consuming modules?
-python sbom_export.py -i analysis.json --inventory
-
-# CycloneDX 1.5 for Dependency-Track, Trivy, Grype, or other tooling
-python sbom_export.py -i analysis.json --sbom projectgraph.cdx.json
-
-# Known CVEs/GHSAs from OSV.dev (requires network access)
-python sbom_export.py -i analysis.json --osv
-
-# Same library present at multiple versions
+python sbom_export.py -i analysis.json --inventory   # static (partial)
+python sbom_export.py -i analysis.json --sbom out.cdx.json
+python sbom_export.py -i analysis.json --osv         # needs network
 python sbom_export.py -i analysis.json --drift
 ```
-
-This command currently consumes static POM declarations and dependency
-management, not the web application's Maven-resolved graph. Its inventory and
-CycloneDX output are therefore **partial** and must not be treated as proof of
-runtime composition. Connecting it to the versioned resolved Scan model is a
-P0/P1 item in `TODO.md`.
 
 `--osv` is advisory enrichment, not a replacement for organizational risk
 acceptance, exploitability review, license review, or a full build-resolved

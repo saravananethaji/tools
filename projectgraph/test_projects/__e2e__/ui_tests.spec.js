@@ -101,4 +101,31 @@ test.describe('Maven Project Graph - UI Tests', () => {
     await page.waitForLoadState('networkidle');
     await page.waitForSelector('.scope-pill, pre.export', { state: 'visible', timeout: 10000 });
   });
+
+  test('OSS inventory view renders a table with honest completeness', async ({ page }) => {
+    await page.goto(`${BASE_URL}/inventory`);
+    await page.waitForLoadState('networkidle');
+    await page.locator('main[data-rendered="true"]').waitFor();
+    // The table (or the empty-state card) must be present.
+    const hasTable = await page.locator('table').count();
+    const hasEmpty = await page.locator('text=No resolved open-source dependencies').count();
+    expect(hasTable + hasEmpty).toBeGreaterThanOrEqual(1);
+    // Completeness badge is always shown and is one of the two honest values.
+    await expect(page.locator('main strong')).not.toHaveText(/unknown/);
+    // The API returns the same shape the view consumes.
+    const api = await page.request.get(`${BASE_URL}/api/inventory`);
+    expect(api.ok()).toBeTruthy();
+    const body = await api.json();
+    expect(['complete', 'partial']).toContain(body.completeness);
+    expect(Array.isArray(body.entries)).toBeTruthy();
+    for (const e of body.entries) {
+      expect(e.canonical_id).toBeTruthy();
+      expect(e.purl).toMatch(/^pkg:maven\//);
+      expect(['external', 'internal']).toContain(e.kind);
+      for (const c of e.consumers) {
+        expect(['direct', 'transitive']).toContain(c.relationship);
+        expect(Array.isArray(c.paths)).toBeTruthy();
+      }
+    }
+  });
 });

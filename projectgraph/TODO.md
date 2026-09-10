@@ -50,9 +50,14 @@ verify another operating system.
 
 ## P1 — Deliver useful dependency intelligence
 
-- [ ] **P1.1 Build resolved OSS inventory.** Configure internal group prefixes
+- [x] **P1.1 Build resolved OSS inventory.** Configure internal group prefixes
   and list external canonical coordinates by consuming module, scope, and
-  direct/transitive path.
+  direct/transitive path. Implemented in `oss_inventory.py` (only resolved
+  module trees contribute; unresolved modules are reported, not dropped;
+  root nodes are never dependencies; paths are bounded with truncation
+  flagged). Exposed via `GET /api/inventory`, `GET /inventory`, and the
+  `PROJECTGRAPH_INTERNAL_PREFIXES` env var. Covered by
+  `tests/test_inventory.py` and the Playwright inventory test.
 - [ ] **P1.2 Correct conflicts and version drift.** Compute them only from
   resolved, module-owned dependency data and show the paths responsible.
 - [ ] **P1.3 Add in-memory blast-radius and dependency-route APIs.** Query an

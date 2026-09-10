@@ -118,7 +118,11 @@ The current endpoints remain during consolidation:
 - `POST /api/load` selects and scans an allowed root.
 - `POST /api/reload` performs a forced rescan.
 - `GET /api/state` returns the current model.
-- `/tree`, `/conflicts`, and `/export` render consumers.
+- `GET /api/inventory` returns the resolved OSS inventory (P1.1): external
+  canonical coordinates by consuming module, scope, direct/transitive
+  relationship, and bounded dependency paths; unresolved modules are reported
+  in `excluded_modules`, never dropped.
+- `/tree`, `/conflicts`, `/inventory`, and `/export` render consumers.
 
 The versioned scan contract should eventually be shared by live Maven scans,
 JSON import/export, SBOM generation, impact analysis, and graph ingestion.

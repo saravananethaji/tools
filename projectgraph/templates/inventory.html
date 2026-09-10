@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}OSS Inventory · Maven Graph{% endblock %}
+{% block content %}
+<div class="card">
+  <h2 style="margin:.2rem 0 .4rem;">Open-Source Inventory (resolved)</h2>
+  <p class="small">
+    External (non-internal) artifacts from <em>resolved</em> Maven dependency
+    trees, grouped by canonical coordinate. Internal groupIds:
+    {% for p in inventory.internal_prefixes %}<code>{{ p }}</code>{% endfor %}
+  </p>
+  <p class="small">
+    Scan: <code>{{ inventory.sources | join(", ") }}</code> ·
+    completeness: <strong class="{{ 'ok' if inventory.completeness == 'complete' else 'err' }}">{{ inventory.completeness }}</strong>
+    · {{ inventory.included_modules | length }} module(s) resolved
+    {{ ", " ~ inventory.excluded_modules | length ~ " excluded" if inventory.excluded_modules else "" }}
+  </p>
+  <button class="btn" onclick="reload()">↻ Reload</button>
+</div>
+
+{% if inventory.excluded_modules %}
+<div class="card">
+  <span class="err">⚠ The following modules could not be resolved and are NOT
+  represented below:</span>
+  <ul class="small">
+    {% for m in inventory.excluded_modules %}
+    <li><code>{{ m.coord_id }}</code> — {{ m.reason }}</li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+{% if not inventory.entries %}
+  <div class="card module-card"><span class="ok">✓ No resolved open-source dependencies.</span></div>
+{% else %}
+  <div class="card" style="overflow-x:auto;">
+    <table style="width:100%; min-width:900px; border-collapse:collapse;">
+      <thead>
+        <tr class="small" style="border-bottom:1px solid var(--border);">
+          <th style="text-align:left; padding:.4rem;">Coordinate</th>
+          <th style="text-align:left; padding:.4rem;">Version</th>
+          <th style="text-align:left; padding:.4rem;">Consumer</th>
+          <th style="text-align:left; padding:.4rem;">Relationship</th>
+          <th style="text-align:left; padding:.4rem;">Scopes</th>
+          <th style="text-align:left; padding:.4rem;">Dependency path</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for e in inventory.entries %}
+          {% for c in e.consumers %}
+          <tr style="border-bottom:1px solid var(--border);">
+            {% if loop.first %}
+            <td rowspan="{{ e.consumers | length }}" style="padding:.4rem; vertical-align:top;">
+              <code>{{ e.groupId }}:{{ e.artifactId }}</code><br>
+              <span class="small">{{ e.purl }}</span>
+            </td>
+            {% endif %}
+            <td style="padding:.4rem;"><span class="ver-badge">{{ e.version }}</span></td>
+            <td style="padding:.4rem;"><code>{{ c.module }}</code></td>
+            <td style="padding:.4rem;"><span class="scope-pill">{{ c.relationship }}</span></td>
+            <td style="padding:.4rem;">{% for s in c.scopes %}<span class="scope-pill">{{ s }}</span> {% endfor %}</td>
+            <td style="padding:.4rem;" class="small">
+              {% for p in c.paths %}
+                <div>{{ p | join(" → ") }}{% if c.paths_truncated and loop.last %} <span class="err">… (truncated)</span>{% endif %}</div>
+              {% endfor %}
+            </td>
+          </tr>
+          {% endfor %}
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% endif %}
+
+<script>
+function reload(){ fetch('/api/reload',{method:'POST'}).then(()=>location.reload()); }
+document.querySelector('main').dataset.rendered = 'true';
+</script>
+{% endblock %}
