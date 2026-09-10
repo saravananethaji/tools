@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+{% block title %}Impact · Maven Graph{% endblock %}
+{% block content %}
+<div class="card">
+  <h2 style="margin:.2rem 0 .4rem;">Impact Analysis</h2>
+  <p class="small">Enter an <strong>exact</strong> library coordinate to see
+  which modules depend on it, which dependency introduces it, and through
+  which paths. Computed in memory from the resolved scan — no graph database
+  required.</p>
+  <form method="get" action="/impact" class="toolbar" style="margin-bottom:0;">
+    <input type="text" name="coordinate" value="{{ coordinate }}"
+           placeholder="groupId:artifactId[:version] — e.g. org.apache.httpcomponents:httpcore"
+           autocomplete="off" spellcheck="false" aria-label="Coordinate">
+    <button type="submit" class="btn">Analyze impact</button>
+    <button type="button" class="btn" onclick="reload()">↻ Reload scan</button>
+  </form>
+  <p class="small" style="margin-bottom:0;">
+    Requires an explicit <code>groupId</code>; artifactId-only queries are
+    rejected so the tool never guesses which library you mean. Accepted:
+    <code>group:artifact[:version]</code>,
+    <code>group:artifact:packaging:version</code>,
+    <code>group:artifact:packaging:classifier:version</code>.
+  </p>
+</div>
+
+{% if error %}
+<div class="card">
+  <span class="err">✗ {{ error }}</span>
+</div>
+{% endif %}
+
+{% if report %}
+  {# ---- query resolution ---- #}
+  <div class="card">
+    <div class="conflict-row">
+      <div>
+        <span class="conflict-key">Query</span>
+        <code>{{ report.query.coordinate }}</code>
+      </div>
+      <span class="small">
+        scanned source: <code>{{ report.completeness }}</code>
+        · max paths per module: {{ report.max_paths }}
+      </span>
+    </div>
+    {% if report.ambiguous %}
+    <div class="err-box">
+      ⚠ This query matched {{ report.matches | length }} distinct artifacts.
+      Results cover all of them. Narrow it with a version, packaging, or
+      classifier to disambiguate.
+    </div>
+    {% endif %}
+    {% if report.matches %}
+    <table style="width:100%; margin-top:.6rem; border-collapse:collapse;">
+      <thead><tr class="small">
+        <th style="text-align:left; padding:.3rem;">Matched artifact</th>
+        <th style="text-align:left; padding:.3rem;">Kind</th>
+        <th style="text-align:left; padding:.3rem;">PURL</th>
+      </tr></thead>
+      <tbody>
+        {% for m in report.matches %}
+        <tr style="border-top:1px solid var(--border);">
+          <td style="padding:.3rem;"><code>{{ m.canonical_id }}</code></td>
+          <td style="padding:.3rem;">
+            {% if m.module_root %}
+              <span class="scope-pill">module root</span>
+            {% else %}
+              <span class="scope-pill">dependency</span>
+            {% endif %}
+          </td>
+          <td style="padding:.3rem;" class="small">{{ m.purl }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+    {% if report.note %}
+    <p class="small" style="margin-bottom:0;">{{ report.note }}</p>
+    {% endif %}
+  </div>
+
+  {# ---- honesty: unresolved modules ---- #}
+  {% if report.excluded_modules %}
+  <div class="card">
+    <span class="err">⚠ {{ report.excluded_modules | length }} module(s) could
+    not be resolved and are NOT represented in this answer:</span>
+    <ul class="small">
+      {% for m in report.excluded_modules %}
+      <li><code>{{ m.coord_id }}</code> — {{ m.reason }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  {# ---- the answer ---- #}
+  {% if report.modules %}
+  <div class="card">
+    <strong>{{ report.affected_module_count }}</strong> affected module(s),
+    <strong>{{ report.path_count }}</strong> path(s)
+    {% if report.truncated %} · <span class="err">paths truncated</span>{% endif %}
+  </div>
+
+  {% for m in report.modules %}
+  <div class="card module-card">
+    <div class="conflict-row">
+      <div>
+        <span class="conflict-key">{{ m.module }}</span>
+        <span class="scope-pill">{{ m.relationship }}</span>
+        {% for s in m.scopes %}<span class="scope-pill">{{ s }}</span>{% endfor %}
+      </div>
+      <span class="small">
+        min depth {{ m.min_depth }} · {{ m.project_type }}
+      </span>
+    </div>
+
+    <table style="width:100%; margin-top:.6rem; border-collapse:collapse;">
+      <tbody>
+        <tr>
+          <td class="small" style="padding:.3rem; width:9rem;">Source POM</td>
+          <td style="padding:.3rem;"><code>{{ m.pom_path }}</code></td>
+        </tr>
+        <tr style="border-top:1px solid var(--border);">
+          <td class="small" style="padding:.3rem;">Directory</td>
+          <td style="padding:.3rem;"><code>{{ m.dir_path }}</code></td>
+        </tr>
+        <tr style="border-top:1px solid var(--border);">
+          <td class="small" style="padding:.3rem;">Introduced by</td>
+          <td style="padding:.3rem;">
+            {% if m.introduced_by %}
+              {% for b in m.introduced_by %}<code>{{ b }}</code> {% endfor %}
+            {% else %}
+              <span class="small">declared directly in this module's POM</span>
+            {% endif %}
+          </td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p class="small" style="margin:.6rem 0 .2rem;">Dependency path(s):</p>
+    {% for p in m.paths %}
+      <div class="small" style="padding:.2rem 0;">
+        {{ p | join(" → ") }}
+        {% if loop.last and m.paths_truncated %}
+          <span class="err">… (more paths not shown)</span>
+        {% endif %}
+      </div>
+    {% endfor %}
+  </div>
+  {% endfor %}
+
+  <div class="card">
+    <p class="small" style="margin:0;">
+      This view reports evidence only: where the coordinate occurs and how it
+      is reached. It does not generate or suggest POM edits — remediation
+      decisions belong to the owning team.
+    </p>
+  </div>
+  {% endif %}
+{% endif %}
+
+<script>
+function reload(){ fetch('/api/reload',{method:'POST'}).then(()=>location.reload()); }
+document.querySelector('main').dataset.rendered = 'true';
+</script>
+{% endblock %}

@@ -4,6 +4,9 @@ Routes:
   GET  /                 -> redirect to /tree
   GET  /api/state         -> full model as JSON (modules + trees)
   GET  /api/inventory     -> resolved OSS inventory as JSON (P1.1)
+  GET  /api/impact        -> blast radius for an exact coordinate (P1.3)
+  GET  /api/routes        -> dependency routes between coordinates (P1.3)
+  GET  /impact            -> impact view for an exact coordinate (P1.4)
   GET  /tree              -> tree view (option 1) with search (option 3)
   GET  /conflicts         -> conflicts view (option 2)
   GET  /inventory         -> OSS inventory view (P1.1)
@@ -34,6 +37,7 @@ from graph_model import GraphModel, Module, TreeNode, SCAN_SCHEMA_VERSION
 from neo4j_export import export_cypher
 from pom_parser import parse_pom, PomInfo, Dependency, Plugin, ParentInfo
 from oss_inventory import build_inventory
+from impact import blast_radius, dependency_routes
 
 # Configure logging
 logging.basicConfig(
@@ -198,19 +202,91 @@ async def inventory_view(request: Request):
     })
 
 
+@app.get("/api/impact")
+async def api_impact(coordinate: str, max_paths: int = 16):
+    """Blast radius for an exact coordinate (P1.3).
+
+    Requires an explicit groupId:artifactId; artifactId-only queries are
+    rejected. Ambiguous coordinates (several versions or classifier variants)
+    are reported as such rather than silently resolved to one.
+    """
+    model = await _get_model()
+    try:
+        report = await run_in_threadpool(blast_radius, model, coordinate,
+                                         max_paths)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        )
+    return JSONResponse(report)
+
+
+@app.get("/api/routes")
+async def api_routes(from_coordinate: str, to_coordinate: str,
+                     max_paths: int = 16):
+    """Bounded dependency routes between two exact coordinates (P1.3)."""
+    model = await _get_model()
+    try:
+        report = await run_in_threadpool(dependency_routes, model,
+                                         from_coordinate, to_coordinate,
+                                         max_paths)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        )
+    return JSONResponse(report)
+
+
+@app.get("/impact", response_class=HTMLResponse)
+async def impact_view(request: Request, coordinate: str = "",
+                      max_paths: int = 16):
+    """Impact view (P1.4): search an exact library and show affected modules,
+    direct bringers, dependency paths, and source POMs.
+
+    This view reports evidence only. It deliberately does not generate
+    speculative "minimal fix" POM XML (see TODO.md Parked).
+    """
+    model = await _get_model()
+    report = None
+    error = None
+    if coordinate.strip():
+        try:
+            report = await run_in_threadpool(blast_radius, model, coordinate,
+                                             max_paths)
+        except ValueError as exc:
+            error = str(exc)
+    return templates.TemplateResponse(request, "impact.html", {
+        "report": report,
+        "error": error,
+        "coordinate": coordinate.strip(),
+        "max_paths": max_paths,
+        "root": _state["root"] or _default_root(),
+    })
+
+
 @app.get("/conflicts", response_class=HTMLResponse)
 async def conflicts_view(request: Request):
     model = await _get_model()
     conflicts = model.conflicts()
+    unresolved = [
+        {"coord_id": m.coord_id, "reason": m.error or m.analysis_status}
+        for m in model.modules if not m.tree
+    ]
     return templates.TemplateResponse(request, "conflicts.html", {
         "conflicts": [
             {
                 "artifact_key": c.artifact_key,
                 "versions": c.versions,
+                "kind": c.kind,
                 "occurrences": c.occurrences,
+                "modules": c.modules,
+                "truncated": c.truncated,
             }
             for c in conflicts
         ],
+        "unresolved_modules": unresolved,
         "root": _state["root"] or _default_root(),
     })
 

@@ -58,14 +58,35 @@ verify another operating system.
   flagged). Exposed via `GET /api/inventory`, `GET /inventory`, and the
   `PROJECTGRAPH_INTERNAL_PREFIXES` env var. Covered by
   `tests/test_inventory.py` and the Playwright inventory test.
-- [ ] **P1.2 Correct conflicts and version drift.** Compute them only from
+- [x] **P1.2 Correct conflicts and version drift.** Compute them only from
   resolved, module-owned dependency data and show the paths responsible.
-- [ ] **P1.3 Add in-memory blast-radius and dependency-route APIs.** Query an
+  `GraphModel.conflicts()` now distinguishes `conflict` (one module resolves
+  two versions itself) from `drift` (different modules resolve different
+  versions); every occurrence carries the module-owned dependency path,
+  scope, depth, and direct flag; paths are bounded per (module, version) with
+  truncation flagged. Unresolved modules contribute nothing and are listed
+  explicitly in the view. Covered by `tests/test_conflicts.py` and the
+  Playwright conflicts test.
+- [x] **P1.3 Add in-memory blast-radius and dependency-route APIs.** Query an
   exact canonical coordinate; return bounded module-specific paths without a
-  graph database.
-- [ ] **P1.4 Add an Impact UI.** Search an exact library and show affected
+  graph database. Implemented in `impact.py`: `blast_radius()` (affected
+  modules, POM paths, direct/transitive relationship, introducing artifact,
+  scopes, min depth, bounded paths) and `dependency_routes()` (bounded routes
+  between two exact coordinates). Exact matching only — artifactId-only
+  queries are rejected with 400, and ambiguity (several versions or classifier
+  variants) is reported rather than silently resolved. Nearest occurrence wins
+  per branch; cycles terminate; unresolved modules are excluded and listed.
+  Exposed as `GET /api/impact` and `GET /api/routes`. Covered by
+  `tests/test_impact.py` and three Playwright API tests.
+- [x] **P1.4 Add an Impact UI.** Search an exact library and show affected
   modules, direct bringers, paths, and source POMs. Do not generate speculative
-  “minimal fix” XML.
+  "minimal fix" XML. Implemented as `GET /impact` (`templates/impact.html`,
+  nav item "4 · Impact"): coordinate form with inline guidance, matched-artifact
+  table, ambiguity warning, unresolved-module warning, and per-module evidence
+  (source POM, directory, introducing artifact, scopes, min depth, all bounded
+  paths with truncation). ArtifactId-only queries show a visible error instead
+  of guessing. The view states explicitly that it reports evidence only and
+  generates no POM edits. Covered by three Playwright UI tests.
 - [ ] **P1.5 Produce a validated CycloneDX SBOM.** Generate it from a completed
   resolved scan, validate against the pinned CycloneDX schema, and label any
   partial export visibly.

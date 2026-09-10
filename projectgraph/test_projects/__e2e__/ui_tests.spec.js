@@ -102,6 +102,115 @@ test.describe('Maven Project Graph - UI Tests', () => {
     await page.waitForSelector('.scope-pill, pre.export', { state: 'visible', timeout: 10000 });
   });
 
+  test('impact API answers blast radius without a graph database', async ({ page }) => {
+    // Exact coordinate that exists in the scan the fixtures resolve to.
+    const res = await page.request.get(
+      `${BASE_URL}/api/impact?coordinate=${encodeURIComponent('org.apache.httpcomponents:httpcore')}`);
+    expect(res.ok()).toBeTruthy();
+    const body = await res.json();
+    expect(body.query.parsed.groupId).toBe('org.apache.httpcomponents');
+    expect(body.query.parsed.artifactId).toBe('httpcore');
+    expect(Array.isArray(body.matches)).toBeTruthy();
+    expect(['complete', 'partial']).toContain(body.completeness);
+    expect(Array.isArray(body.excluded_modules)).toBeTruthy();
+    // Every reported module carries bounded paths and provenance.
+    for (const mod of body.modules) {
+      expect(mod.pom_path).toBeTruthy();
+      expect(['direct', 'transitive']).toContain(mod.relationship);
+      expect(Array.isArray(mod.paths)).toBeTruthy();
+      for (const p of mod.paths) {
+        expect(p.length).toBeGreaterThanOrEqual(2);
+      }
+    }
+  });
+
+  test('impact API rejects artifactId-only queries', async ({ page }) => {
+    const res = await page.request.get(`${BASE_URL}/api/impact?coordinate=httpcore`);
+    expect(res.status()).toBe(400);
+    const body = await res.json();
+    expect(JSON.stringify(body)).toContain('explicit groupId');
+  });
+
+  test('routes API returns bounded routes or an explicit empty answer', async ({ page }) => {
+    const url = `${BASE_URL}/api/routes`
+      + `?from_coordinate=${encodeURIComponent('org.apache.httpcomponents:httpclient')}`
+      + `&to_coordinate=${encodeURIComponent('org.apache.httpcomponents:httpcore')}`;
+    const res = await page.request.get(url);
+    expect(res.ok()).toBeTruthy();
+    const body = await res.json();
+    expect(typeof body.route_count).toBe('number');
+    expect(Array.isArray(body.routes)).toBeTruthy();
+    // A zero-route answer must say so rather than being silently empty.
+    if (body.route_count === 0) {
+      expect(body.note).toBeTruthy();
+    } else {
+      for (const r of body.routes) {
+        expect(r.module).toBeTruthy();
+        expect(Array.isArray(r.path)).toBeTruthy();
+        expect(r.path.length).toBeGreaterThanOrEqual(2);
+      }
+    }
+  });
+
+  test('impact UI shows affected modules, paths and source POMs', async ({ page }) => {
+    await page.goto(`${BASE_URL}/impact`);
+    await page.waitForLoadState('networkidle');
+    await page.locator('main[data-rendered="true"]').waitFor();
+    // The empty state must invite an exact coordinate and reject guessing.
+    await expect(page.locator('h2')).toContainText('Impact Analysis');
+    await expect(page.locator('.card').first()).toContainText('exact');
+    await expect(page.locator('input[name="coordinate"]')).toBeVisible();
+    // No report is rendered until a query is made.
+    await expect(page.locator('text=affected module(s)')).toHaveCount(0);
+  });
+
+  test('impact UI rejects an artifactId-only query with a visible error', async ({ page }) => {
+    await page.goto(`${BASE_URL}/impact?coordinate=httpcore`);
+    await page.waitForLoadState('networkidle');
+    await page.locator('main[data-rendered="true"]').waitFor();
+    await expect(page.locator('.err')).toContainText('groupId');
+  });
+
+  test('impact UI renders a resolved query end to end', async ({ page }) => {
+    const coordinate = 'org.apache.httpcomponents:httpcore';
+    await page.goto(`${BASE_URL}/impact?coordinate=${encodeURIComponent(coordinate)}`);
+    await page.waitForLoadState('networkidle');
+    await page.locator('main[data-rendered="true"]').waitFor();
+    // Either an affected-modules answer or an explicit no-match note.
+    const hasAnswer = await page.locator('text=affected module(s)').count();
+    if (hasAnswer > 0) {
+      // Evidence must include the source POM and the dependency path.
+      await expect(page.locator('text=Source POM')).toBeVisible();
+      await expect(page.locator('td code').first()).toBeVisible();
+      await expect(page.locator('text=Dependency path(s)')).toBeVisible();
+    } else {
+      await expect(page.locator('main')).toContainText('No resolved artifact matches');
+    }
+    // The view must never present speculative fix XML.
+    await expect(page.locator('pre')).toHaveCount(0);
+  });
+
+  test('conflicts view states resolved-only semantics', async ({ page }) => {
+    await page.goto(`${BASE_URL}/conflicts`);
+    await page.waitForLoadState('networkidle');
+    await page.locator('main[data-rendered="true"]').waitFor();
+    // The view must always explain that it uses resolved data only.
+    await expect(page.locator('h2')).toContainText('Version Conflicts');
+    await expect(page.locator('.card').first()).toContainText('resolved');
+    // Either a conflict card with paths, or the explicit clean state.
+    const cards = page.locator('.module-card');
+    const cardCount = await cards.count();
+    expect(cardCount).toBeGreaterThanOrEqual(1);
+    const clean = await page.locator('text=No version conflicts or drift').count();
+    if (clean === 0) {
+      // Every conflict row shows a dependency path, never a bare version.
+      const rows = page.locator('table tbody tr');
+      expect(await rows.count()).toBeGreaterThan(0);
+      const arrows = await page.locator('table tbody tr td:last-child').count();
+      expect(arrows).toBeGreaterThan(0);
+    }
+  });
+
   test('OSS inventory view renders a table with honest completeness', async ({ page }) => {
     await page.goto(`${BASE_URL}/inventory`);
     await page.waitForLoadState('networkidle');

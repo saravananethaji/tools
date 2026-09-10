@@ -100,10 +100,18 @@ Static metadata may explain a resolved edge, but it must never fabricate one.
 
 - **Tree:** one card per Maven module; the body shows its resolved library
   hierarchy and explicit empty/error/stale states.
-- **Conflicts/drift:** computed from module-owned resolved edges, excluding
-  module roots and managed-but-unused declarations.
+- **Conflicts/drift:** computed from module-owned resolved edges only,
+  excluding module roots and managed-but-unused declarations. A `conflict` is
+  one module resolving two versions of the same GA; `drift` is different
+  modules resolving different versions. Each occurrence carries the
+  dependency path, scope, and depth responsible for it, so the route is
+  visible rather than asserted. Paths are bounded per (module, version) and
+  truncation is flagged. Unresolved modules contribute nothing and are listed
+  explicitly.
 - **Impact:** exact canonical coordinate to affected modules and dependency
-  paths. No artifactId-only matching.
+  paths. No artifactId-only matching. Answers are computed in memory and are
+  bounded (path count and traversal budget), with any truncation reported
+  rather than hidden.
 - **SBOM:** generated from a completed resolved scan. Partial static exports
   must be labeled as such. CycloneDX output requires schema validation.
 - **OSV:** optional enrichment of exact resolved Maven versions. Advisory data
@@ -122,7 +130,16 @@ The current endpoints remain during consolidation:
   canonical coordinates by consuming module, scope, direct/transitive
   relationship, and bounded dependency paths; unresolved modules are reported
   in `excluded_modules`, never dropped.
-- `/tree`, `/conflicts`, `/inventory`, and `/export` render consumers.
+- `GET /api/impact?coordinate=…` returns the blast radius for an exact
+  coordinate (P1.3): affected modules with POM paths, direct/transitive
+  relationship, introducing artifact, scopes, minimum depth, and bounded
+  paths. ArtifactId-only queries are rejected; ambiguity is reported.
+- `GET /api/routes?from_coordinate=…&to_coordinate=…` returns bounded routes
+  between two exact coordinates (P1.3) in memory, with no graph database.
+- `/tree`, `/conflicts`, `/inventory`, `/impact`, and `/export` render
+  consumers. `/impact` reports evidence only (occurrence, relationship,
+  introducing artifact, paths, source POMs) and deliberately generates no
+  remediation POM XML.
 
 The versioned scan contract should eventually be shared by live Maven scans,
 JSON import/export, SBOM generation, impact analysis, and graph ingestion.

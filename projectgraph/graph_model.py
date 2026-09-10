@@ -181,8 +181,15 @@ class Module:
 class Conflict:
     artifact_key: str          # groupId:artifactId
     versions: List[str]
-    # where each version appears: list of (module coord, version, scope)
-    occurrences: List[dict]
+    # "conflict" = one module's resolved tree contains >1 version of this GA;
+    # "drift"    = different modules resolve different versions.
+    kind: str = "drift"
+    # Every occurrence, each with the module-owned path that produced it:
+    #   {module, version, canonical_id, scope, direct, depth, path}
+    occurrences: List[dict] = field(default_factory=list)
+    modules: List[str] = field(default_factory=list)
+    # True when some (module, version) had more paths than were stored.
+    truncated: bool = False
 
 
 # ----------------------------------------------------------------------
@@ -210,43 +217,100 @@ class GraphModel:
 
     # --- queries ---
 
-    def conflicts(self) -> List[Conflict]:
-        """Find groupId:artifactId pairs that have >1 distinct version
-        across the combined graph (all modules, all transitive deps)."""
-        # artifact_key -> { version -> [ {module, scope} ] }
-        seen: Dict[str, Dict[str, List[dict]]] = defaultdict(lambda: defaultdict(list))
+    def conflicts(self, max_paths: int = 8) -> List[Conflict]:
+        """Find groupId:artifactId pairs resolved to >1 distinct version.
 
-        def walk(node: TreeNode, module: Module, _visited: set):
-            if node.artifact_id in _visited:
-                return
-            _visited = _visited | {node.artifact_id}
+        Computed only from resolved, module-owned dependency data:
+          * modules without a resolved tree contribute nothing (they are
+            reported through the scan's error status instead of silently
+            shrinking the result);
+          * a module's own root node is context, not a resolved dependency;
+          * every occurrence carries the module-owned dependency path that
+            produced it, so the responsible route is visible;
+          * paths per (module, version) are bounded by ``max_paths`` and the
+            truncation is flagged rather than hidden.
+
+        ``kind`` distinguishes:
+          * ``conflict`` — one module's own tree contains two versions of the
+            same GA (its classpath cannot satisfy both);
+          * ``drift``    — different modules resolved different versions.
+        """
+        # artifact_key -> version -> canonical_id -> module_id -> accumulator
+        seen: Dict[str, Dict[str, Dict[str, Dict[str, dict]]]] = defaultdict(
+            lambda: defaultdict(lambda: defaultdict(dict)))
+        resolved_modules: set = set()
+
+        def walk(node: TreeNode, module: Module, path: List[str],
+                 on_path: set, depth: int) -> None:
+            if node.artifact_id in on_path:
+                return  # real cycle: stop this branch
+            on_path = on_path | {node.artifact_id}
             key = f"{node.groupId}:{node.artifactId}"
-            seen[key][node.version].append({
+            per_module = seen[key][node.version][node.artifact_id]
+            acc = per_module.setdefault(module.coord_id, {
                 "module": module.display,
-                "scope": node.scope,
-                "coord_id": node.coord_id,
+                "paths": [],
+                "seen_paths": 0,
+                "scopes": set(),
+                "direct": False,
             })
+            acc["scopes"].add(node.scope)
+            if depth == 1:
+                acc["direct"] = True
+            acc["seen_paths"] += 1
+            full_path = path + [node.artifact_id]
+            if len(acc["paths"]) < max_paths:
+                acc["paths"].append(full_path)
             for c in node.children:
-                walk(c, module, _visited)
+                walk(c, module, full_path, on_path, depth + 1)
 
         for m in self.modules:
-            if m.tree:
-                # A module's own root is context, not a resolved dependency.
-                for child in m.tree.children:
-                    walk(child, m, set())
+            if not m.tree:
+                continue  # unresolved modules are surfaced via their status
+            resolved_modules.add(m.coord_id)
+            for child in m.tree.children:
+                walk(child, m, [m.tree.artifact_id],
+                     {m.tree.artifact_id}, 1)
 
         conflicts = []
         for key, versions in sorted(seen.items()):
-            if len(versions) > 1:
-                occ = []
-                for v, locs in sorted(versions.items()):
-                    for loc in locs:
-                        occ.append({"version": v, **loc})
-                conflicts.append(Conflict(
-                    artifact_key=key,
-                    versions=sorted(versions.keys()),
-                    occurrences=occ,
-                ))
+            if len(versions) < 2:
+                continue
+            occurrences: List[dict] = []
+            truncated = False
+            module_ids: set = set()
+            for version in sorted(versions):
+                for canonical_id in sorted(versions[version]):
+                    for module_id in sorted(versions[version][canonical_id]):
+                        acc = versions[version][canonical_id][module_id]
+                        module_ids.add(module_id)
+                        if acc["seen_paths"] > len(acc["paths"]):
+                            truncated = True
+                        for path in acc["paths"]:
+                            occurrences.append({
+                                "module": acc["module"],
+                                "module_id": module_id,
+                                "version": version,
+                                "canonical_id": canonical_id,
+                                "scope": ",".join(sorted(acc["scopes"])),
+                                "direct": acc["direct"],
+                                "depth": len(path) - 1,
+                                "path": path,
+                            })
+            # A conflict is intra-module when one module resolved two
+            # versions itself; otherwise it is cross-module drift.
+            per_module_versions: Dict[str, set] = defaultdict(set)
+            for occ in occurrences:
+                per_module_versions[occ["module_id"]].add(occ["version"])
+            intra = any(len(v) > 1 for v in per_module_versions.values())
+            conflicts.append(Conflict(
+                artifact_key=key,
+                versions=sorted(versions.keys()),
+                kind="conflict" if intra else "drift",
+                occurrences=occurrences,
+                modules=sorted(module_ids),
+                truncated=truncated,
+            ))
         return conflicts
 
     def all_artifacts(self) -> List[dict]:
