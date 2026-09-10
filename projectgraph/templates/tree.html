@@ -9,6 +9,9 @@
   .node-kind.internal { background:#183b36; color:#84dfbd; }
   .node-kind.oss { background:#282d3d; color:#aab8db; }
   .tree-more { margin:.35rem 0; font-size:.78rem; }
+  .scan-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:.7rem; margin-top:.7rem; }
+  .scan-metric { background:#11141d; border:1px solid var(--border); border-radius:6px; padding:.55rem .65rem; }
+  .scan-metric strong { display:block; font-size:1rem; margin-top:.12rem; }
 </style>
 {% endblock %}
 {% block content %}
@@ -20,6 +23,35 @@
     <button class="btn btn-secondary" id="collapse-all" type="button">Collapse All</button>
     <button class="btn btn-secondary" id="expand-safe" type="button">Expand modules (max 25)</button>
   </div>
+</div>
+<div class="card" id="scan-health">
+  <div class="conflict-row">
+    <div>
+      <span class="conflict-key">Scan health</span>
+      <span class="scope-pill">{{ diagnostics.source }}</span>
+      <span class="scope-pill {{ 'ok' if diagnostics.completeness == 'complete' else 'err' }}">{{ diagnostics.completeness }}</span>
+    </div>
+    <span class="small">scanned at <code>{{ diagnostics.generated_at }}</code></span>
+  </div>
+  <div class="scan-grid">
+    <div class="scan-metric small">Modules<strong>{{ diagnostics.module_count }}</strong></div>
+    <div class="scan-metric small">Maven-resolved<strong>{{ diagnostics.resolved_module_count }}</strong></div>
+    <div class="scan-metric small">Dependencies<strong>{{ diagnostics.dependency_count }}</strong></div>
+    <div class="scan-metric small">Excluded / failed<strong class="{{ 'ok' if diagnostics.excluded_module_count == 0 else 'err' }}">{{ diagnostics.excluded_module_count }}</strong></div>
+    <div class="scan-metric small">Cache{% for state, count in diagnostics.cache_state_counts.items() %}<strong>{{ state }}: {{ count }}</strong>{% else %}<strong>unknown</strong>{% endfor %}</div>
+    <div class="scan-metric small">Maven{% if diagnostics.maven_versions %}{% for version in diagnostics.maven_versions %}<strong>{{ version }}</strong>{% endfor %}{% else %}<strong>not recorded</strong>{% endif %}</div>
+  </div>
+  <p class="small" style="margin:.65rem 0 0;">{{ diagnostics.note }}</p>
+  {% if diagnostics.excluded_modules %}
+  <details style="margin-top:.65rem;">
+    <summary class="err">{{ diagnostics.excluded_module_count }} module(s) excluded from resolved answers</summary>
+    <ul class="small" style="margin:.45rem 0 0;">
+      {% for module in diagnostics.excluded_modules %}
+      <li><code>{{ module.module }}</code> — {{ module.status }}: {{ module.reason }}<br><span class="muted">{{ module.pom_path }}</span></li>
+      {% endfor %}
+    </ul>
+  </details>
+  {% endif %}
 </div>
 <p class="small" id="tree-guidance">Trees load one branch at a time. Use a caret to expand a dependency; large sibling sets have a “Show more” control.</p>
 

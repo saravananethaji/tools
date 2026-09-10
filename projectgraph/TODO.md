@@ -130,9 +130,13 @@ verify another operating system.
   Search is debounced, retains only matching branches and their ancestor
   context, and caps rendered search branches at 500. Covered by the tree
   Playwright tests, including lazy initial render and origin labels.
-- [ ] **P1.9 Add scan metadata and diagnostics.** Show scan time, source,
-  completeness, Maven version, cache state, module counts, dependency counts,
-  and actionable per-module errors.
+- [x] **P1.9 Add scan metadata and diagnostics.** `scan_diagnostics.py`
+  provides one truthful summary used by the Dependency Tree **Scan health**
+  panel and `GET /api/diagnostics`: timestamp, source, completeness, Maven
+  version, cache state, module/resolved/dependency counts, and actionable
+  excluded-module errors with source POM paths. Static or failed modules remain
+  visibly excluded rather than being counted as empty. Covered by
+  `tests/test_scan_diagnostics.py` and the tree-page Playwright diagnostic test.
 - [x] **P1.10 Add scan persistence and portable Dependency Snapshots.** Retained
   across restarts: `scan_state.py` atomically saves the last *successful
   resolved* scan and restores it on boot; a failed, empty, or partial static

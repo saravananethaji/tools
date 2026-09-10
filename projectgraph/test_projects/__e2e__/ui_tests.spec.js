@@ -58,6 +58,21 @@ test.describe('Maven Project Graph - UI Tests', () => {
     await expect(page.locator('#tree-0 .node-kind').first()).toHaveText(/internal|oss/);
   });
 
+  test('tree page shows scan health without hiding incomplete evidence', async ({ page }) => {
+    await page.goto(`${BASE_URL}/tree`);
+    await page.locator('main[data-rendered="true"]').waitFor();
+    await expect(page.locator('#scan-health')).toContainText('Scan health');
+    await expect(page.locator('#scan-health')).toContainText('Maven-resolved');
+    await expect(page.locator('#scan-health')).toContainText('Cache');
+
+    const api = await page.request.get(`${BASE_URL}/api/diagnostics`);
+    expect(api.ok()).toBeTruthy();
+    const report = await api.json();
+    expect(['complete', 'partial']).toContain(report.completeness);
+    expect(report.module_count).toBeGreaterThanOrEqual(report.resolved_module_count);
+    expect(Array.isArray(report.excluded_modules)).toBeTruthy();
+  });
+
   test('version indicators display', async ({ page }) => {
     await page.goto(`${BASE_URL}/tree`);
     await page.waitForLoadState('networkidle');

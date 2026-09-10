@@ -8,6 +8,7 @@ Routes:
   GET  /api/routes        -> dependency routes between coordinates (P1.3)
   GET  /impact            -> impact view for an exact coordinate (P1.4)
   GET  /api/topology      -> POM relationship classes as JSON (P1.5)
+  GET  /api/diagnostics   -> scan health and per-module diagnostics (P1.9)
   GET  /topology          -> POM topology view: parent, aggregates,
                              depends on, used by (P1.5)
   GET  /tree              -> tree view (option 1) with search (option 3)
@@ -53,6 +54,7 @@ from inventory_export import inventory_xlsx
 from scan_state import load_last_scan, save_last_scan
 from dependency_snapshot import export_snapshot, import_snapshot
 from pom_topology import build_topology, module_relationships
+from scan_diagnostics import build_scan_diagnostics
 
 # Configure logging
 logging.basicConfig(
@@ -206,9 +208,16 @@ async def tree_view(request: Request, q: str = ""):
     return templates.TemplateResponse(request, "tree.html", {
         "modules": [m.to_dict() for m in model.modules],
         "internal_prefixes": internal_group_prefixes(model),
+        "diagnostics": build_scan_diagnostics(model),
         "query": q,
         "root": _state["root"] or _default_root(),
     })
+
+
+@app.get("/api/diagnostics")
+async def api_diagnostics():
+    """Current scan health: source, completeness, cache, and failures."""
+    return JSONResponse(build_scan_diagnostics(await _get_model()))
 
 
 @app.get("/api/inventory")

@@ -29,11 +29,13 @@ dependency graph with 8 capabilities:
    statements (nodes `:Artifact`, edges `:DEPENDS_ON` with `scope`).
 8. **Dependency Snapshot** — export and reopen a portable, versioned copy of
    the resolved graph on another machine.
+9. **Scan health** — shows source, timestamp, completeness, Maven/cache
+   provenance, counts, and modules excluded from resolved answers.
 
-The web navigation uses the same order as the list above, minus Search, which
-lives inside the Dependency Tree page: `1 · Dependency Tree`, `2 · Topology`,
-`3 · Conflicts`, `4 · OSS Inventory`, `5 · Impact`, `6 · Neo4j Export`,
-`7 · Snapshot`.
+The web navigation uses the same order as the list above, minus Search and
+Scan health, which live inside the Dependency Tree page: `1 · Dependency Tree`,
+`2 · Topology`, `3 · Conflicts`, `4 · OSS Inventory`, `5 · Impact`,
+`6 · Neo4j Export`, `7 · Snapshot`.
 
 ## Layout
 
@@ -78,6 +80,16 @@ currently loaded folder and refreshes its cache. The app retains exactly one
 last successful Maven-resolved scan in its local cache; after a server restart
 all tabs reopen against that saved report. A new successful load replaces it.
 Reload still requires that source folder to exist and be allowed.
+
+### Read scan health before trusting a report
+
+The Dependency Tree page starts with a **Scan health** panel. It tells you when
+the scan was produced, whether its evidence is Maven-resolved or partial, the
+Maven version(s), cache state, module and dependency counts, and every module
+excluded from resolved-only answers. An excluded module is not an empty module:
+its tree, inventory entries, conflicts, impact, and topology resolved edges are
+not evidence until Maven resolves it successfully. Automation can retrieve the
+same JSON at `GET /api/diagnostics`.
 
 ### Move a dependency graph to another machine
 
