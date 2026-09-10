@@ -47,7 +47,7 @@ from graph_model import (
 )
 from neo4j_export import export_cypher
 from pom_parser import parse_pom, PomInfo, Dependency, Plugin, ParentInfo
-from oss_inventory import build_inventory
+from oss_inventory import build_inventory, internal_group_prefixes
 from impact import blast_radius, dependency_routes
 from inventory_export import inventory_xlsx
 from scan_state import load_last_scan, save_last_scan
@@ -205,6 +205,7 @@ async def tree_view(request: Request, q: str = ""):
     model = await _get_model()
     return templates.TemplateResponse(request, "tree.html", {
         "modules": [m.to_dict() for m in model.modules],
+        "internal_prefixes": internal_group_prefixes(model),
         "query": q,
         "root": _state["root"] or _default_root(),
     })

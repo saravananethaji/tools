@@ -88,7 +88,7 @@ verify another operating system.
 - [x] **P1.4 Add an Impact UI.** Search an exact library and show affected
   modules, direct bringers, paths, and source POMs. Do not generate speculative
   "minimal fix" XML. Implemented as `GET /impact` (`templates/impact.html`,
-  nav item "4 · Impact"): coordinate form with inline guidance, matched-artifact
+  nav item "5 · Impact"): coordinate form with inline guidance, matched-artifact
   table, ambiguity warning, unresolved-module warning, and per-module evidence
   (source POM, directory, introducing artifact, scopes, min depth, all bounded
   paths with truncation). ArtifactId-only queries show a visible error instead
@@ -121,9 +121,15 @@ verify another operating system.
 - [ ] **P1.7 Add optional OSV enrichment.** Batch exact Maven coordinates,
   cache responses with timestamps, expose unknown/offline states, and link
   advisories to impact paths. No advisory result is not proof of safety.
-- [ ] **P1.8 Improve tree usability.** Visually distinguish internal and OSS
-  libraries, preserve accessible text/table behavior, and make large-tree
-  search and expansion bounded and responsive.
+- [x] **P1.8 Improve tree usability.** The tree no longer builds every module
+  and every transitive node at page load. It starts collapsed, renders a module
+  root and its branches only when opened, and pages large sibling sets in
+  batches of 100 with **Show more**. Global expansion opens at most 25 module
+  roots and states when the remaining modules are left collapsed. Tree nodes
+  are keyboard-accessible buttons and are labelled **internal** or **OSS**.
+  Search is debounced, retains only matching branches and their ancestor
+  context, and caps rendered search branches at 500. Covered by the tree
+  Playwright tests, including lazy initial render and origin labels.
 - [ ] **P1.9 Add scan metadata and diagnostics.** Show scan time, source,
   completeness, Maven version, cache state, module counts, dependency counts,
   and actionable per-module errors.

@@ -4,8 +4,10 @@ A Python (FastAPI) app that scans a folder of Java/Maven projects, runs
 `mvn --non-recursive dependency:tree -DoutputType=dot` per pom, and presents an interactive
 dependency graph with 8 capabilities:
 
-1. **Dependency tree** — per-module, fully expandable, full transitive depth.
-   Each node shows `groupId:artifactId:version` + scope.
+1. **Dependency tree** — lazy, per-module expansion with full transitive depth
+   available on demand. Each node shows `groupId:artifactId:version`, scope,
+   and whether it is an internal module or OSS library. Large sibling sets use
+   **Show more** paging; global expansion opens at most 25 module roots.
 2. **POM Topology** — the reactor's structure as separate, labelled
    relationship classes: `parent` (POM inheritance), `aggregates` (build
    structure), `depends on` (resolved), `used by` (resolved), and
@@ -21,8 +23,8 @@ dependency graph with 8 capabilities:
 5. **Impact** — enter a coordinate (from `groupId:artifactId` up to a fully
    qualified variant) to see affected modules, the dependency that introduces
    it, the paths responsible, and the source POMs.
-6. **Search** — a search box on the tree page filters/highlights matching
-   nodes and dims the rest.
+6. **Search** — a debounced tree search shows matching nodes with their
+   ancestor context, bounded to the first 500 matching branches.
 7. **Neo4j export** — the whole graph as a `.cypher` script of `MERGE`
    statements (nodes `:Artifact`, edges `:DEPENDS_ON` with `scope`).
 8. **Dependency Snapshot** — export and reopen a portable, versioned copy of
@@ -68,7 +70,8 @@ reject folders outside `PROJECTGRAPH_ALLOWED_ROOTS`; that is intentional.
 2. Open `http://127.0.0.1:8000`.
 3. In the header, paste the absolute folder that contains your Maven projects.
 4. Click **Load folder** and wait for the module count to appear.
-5. Use **Dependency Tree**, **Conflicts**, **OSS Inventory**, and **Impact**.
+5. Use **Dependency Tree**, **Topology**, **Conflicts**, **OSS Inventory**,
+   **Impact**, **Neo4j Export**, and **Snapshot**.
 
 **Load folder** scans a different folder. **Reload** re-runs Maven for the
 currently loaded folder and refreshes its cache. The app retains exactly one

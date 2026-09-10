@@ -37,11 +37,25 @@ test.describe('Maven Project Graph - UI Tests', () => {
     // Search for a specific module
     await page.fill('input#search', 'order-service');
     // Check that we have matching modules
+    await expect(page.locator('.node.match').first()).toBeVisible();
     const matchCount = await page.locator('.node.match').count();
     console.log(`Found ${matchCount} matching modules`);
     expect(matchCount).toBeGreaterThan(0);
     // Clear search
     await page.fill('input#search', '');
+  });
+
+  test('tree starts lazy and labels dependency origin', async ({ page }) => {
+    await page.goto(`${BASE_URL}/tree`);
+    await page.locator('main[data-rendered="true"]').waitFor();
+    // Loading the page must not build every tree in the DOM.
+    await expect(page.locator('.tree-body:not(.hidden)')).toHaveCount(0);
+    await expect(page.locator('#tree-0 .node')).toHaveCount(0);
+    await expect(page.locator('#tree-guidance')).toContainText('one branch at a time');
+
+    await page.locator('.module-head').first().click();
+    await expect(page.locator('#tree-0 .node-kind').first()).toBeVisible();
+    await expect(page.locator('#tree-0 .node-kind').first()).toHaveText(/internal|oss/);
   });
 
   test('version indicators display', async ({ page }) => {
@@ -76,8 +90,8 @@ test.describe('Maven Project Graph - UI Tests', () => {
       const firstHidden = await bodies.first().getAttribute('class');
       console.log(`First tree body class: ${firstHidden}`);
     }
-    // Click expand all
-    await page.click('button:text("Expand All")');
+    // Global expansion is intentionally bounded for large scans.
+    await page.click('button:text("Expand modules")');
     // Check that tree bodies are visible
     const visibleCount = await bodies.evaluateAll(
       els => Array.from(els).filter(el => !el.classList.contains('hidden')).length

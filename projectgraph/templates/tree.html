@@ -1,30 +1,43 @@
 {% extends "base.html" %}
 {% block title %}Dependency Hierarchy Maven Graph{% endblock %}
+{% block extra_head %}
+<style>
+  .module-head { width:100%; text-align:left; font:inherit; color:inherit; border:0; }
+  .tree-toggle { border:0; background:transparent; color:inherit; cursor:pointer; font:inherit; text-align:left; width:100%; }
+  .tree-toggle:focus-visible, .module-head:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .node-kind { font-size:.68rem; border-radius:10px; padding:.08rem .35rem; margin-left:.25rem; }
+  .node-kind.internal { background:#183b36; color:#84dfbd; }
+  .node-kind.oss { background:#282d3d; color:#aab8db; }
+  .tree-more { margin:.35rem 0; font-size:.78rem; }
+</style>
+{% endblock %}
 {% block content %}
 <div class="toolbar">
   <input type="text" id="search" placeholder="Search modules/dependencies (groupId / artifactId / version)…" value="{{ query }}" autocomplete="off">
   <button class="btn" onclick="reload()">↻ Reload</button>
   <span id="count" class="small"></span>
   <div class="btn-group" style="margin-left:1rem;">
-    <button class="btn btn-secondary" onclick="toggleAll(false)">Collapse All</button>
-    <button class="btn btn-secondary" onclick="toggleAll(true)">Expand All</button>
+    <button class="btn btn-secondary" id="collapse-all" type="button">Collapse All</button>
+    <button class="btn btn-secondary" id="expand-safe" type="button">Expand modules (max 25)</button>
   </div>
 </div>
+<p class="small" id="tree-guidance">Trees load one branch at a time. Use a caret to expand a dependency; large sibling sets have a “Show more” control.</p>
 
 <div id="modules">
   {% for m in modules %}
-  <div class="card module-card">
-    <div class="module-head{% if m.error %} err{% endif %}" onclick="toggleModule(this)">
+  <div class="card module-card" data-module-index="{{ loop.index0 }}">
+    <button class="module-head{% if m.error %} err{% endif %}" type="button" aria-expanded="false">
       <span class="caret">▶</span>
       <span class="module-title">{{ m.display }}
         <span class="version-pill">{{ m.version }}</span>
         <span class="scope-pill">{{ m.project_type }}</span>
         <span class="scope-pill">{{ m.analysis_status }}</span>
+        <span class="scope-pill">{{ m.dependency_count }} {{ 'dependency' if m.dependency_count == 1 else 'dependencies' }}</span>
         {% if m.cache_state != "none" %}<span class="scope-pill">{{ m.cache_state }}</span>{% endif %}
         {% if m.error %}<span class="scope-pill err">error</span>{% endif %}
       </span>
       <span class="small" style="margin-left:auto">{{ m.pom_path }}</span>
-    </div>
+    </button>
     {% if m.error %}
       <div class="err-box"><b>mvn error:</b> {{ m.error }}</div>
     {% else %}
@@ -38,211 +51,107 @@
 
 <script>
 const MODULES = {{ modules | tojson }};
+const BRANCH_PAGE_SIZE = 100;
+const SEARCH_NODE_LIMIT = 500;
+const SAFE_MODULE_EXPANSION_LIMIT = 25;
+const INTERNAL_PREFIXES = {{ internal_prefixes | tojson }};
 
-// Track artifact usage across modules (for detecting duplicate JARs / version discrepancies)
-const artifactUsage = {};
-MODULES.forEach(m => {
-  function walk(node) {
-    if (!node.artifactId) return;
-    const ga = (node.groupId ? node.groupId + ':' : '') + node.artifactId;
-    if (!artifactUsage[ga]) artifactUsage[ga] = new Set();
-    artifactUsage[ga].add(node.coord_id);
-    if (node.children) node.children.forEach(walk);
-  }
-  if (m.tree) walk(m.tree);
-});
+function label(node) { return `${node.groupId}:${node.artifactId}:${node.version}`; }
+function nodeKind(node) {
+  return INTERNAL_PREFIXES.some(prefix => node.groupId === prefix || node.groupId.startsWith(`${prefix}.`)) ? 'internal' : 'oss';
+}
+function addBadge(row, text, className = 'scope-pill', title = '') {
+  const badge = document.createElement('span'); badge.className = className; badge.textContent = text;
+  if (title) badge.title = title; row.appendChild(badge);
+}
+function addVersionMarkers(row, node) {
+  if (node.versionOverride) addBadge(row, '↕', 'scope-pill', 'Version overridden in this POM');
+  if (node.versionExtended) addBadge(row, '🟡', 'scope-pill', 'Version range explicitly extended');
+  if (node.bomImported) addBadge(row, '🔗', 'scope-pill', 'Version from BOM dependencyManagement');
+  if (node.usesPackageGen) addBadge(row, '📦', 'scope-pill', 'Uses Package Gen Maven plugin');
+  if (node.versionConflict) addBadge(row, '⚠', 'scope-pill', 'Version conflict detected');
+  if (node.cycle) addBadge(row, '↺ cycle', 'scope-pill err', 'Circular dependency detected');
+}
 
-// Find artifacts that have multiple distinct versions across modules
-const duplicateArtifacts = {};
-Object.keys(artifactUsage).forEach(ga => {
-  if (artifactUsage[ga].size > 1) {
-    duplicateArtifacts[ga] = [...artifactUsage[ga]];
-  }
-});
-
-// Render a tree node with full hierarchy info
-function renderTree(container, node, query, level = 0, pathHistory = []) {
-  const li = document.createElement('li');
-  li.className = 'node';
-
-  // Build row with indentation showing hierarchy depth
-  const indent = level * 18;
-  const row = document.createElement('div');
-  row.className = 'row';
-  row.style.paddingLeft = indent + 'px';
-  row.style.borderLeft = '1px solid #e0e0e0';
-
-  const name = document.createElement('span');
-  name.className = 'name';
-  name.textContent = node.groupId + ':' + node.artifactId + ':' + node.version;
-  
-  const ver = document.createElement('span');
-  ver.className = 'version-pill';
-  ver.textContent = node.version;
-  
-  // VERSION INDICATORS
-  const scope = document.createElement('span');
-  scope.className = 'scope-pill';
-  scope.textContent = node.scope || 'compile';
-  
-  // Override indicator (direct POM override of BOM)
-  if (node.versionOverride) {
-    const overrideBadge = document.createElement('span');
-    overrideBadge.className = 'scope-pill override-badge';
-    overrideBadge.title = 'Version overridden in this POM';
-    overrideBadge.innerHTML = '↕';
-    scope.appendChild(overrideBadge);
-  }
-  
-  // Extension indicator (version range explicitly widened)
-  if (node.versionExtended) {
-    const extBadge = document.createElement('span');
-    extBadge.className = 'scope-pill ext-badge';
-    extBadge.title = 'Version range explicitly extended';
-    extBadge.innerHTML = '🟡';
-    scope.appendChild(extBadge);
-  }
-  
-  // BOM import marker
-  if (node.bomImported) {
-    const bomBadge = document.createElement('span');
-    bomBadge.className = 'scope-pill bom-badge';
-    bomBadge.title = 'Version from BOM dependencyManagement';
-    bomBadge.innerHTML = '🔗';
-    scope.appendChild(bomBadge);
-  }
-  
-  // Package Gen plugin usage
-  if (node.usesPackageGen) {
-    const pgBadge = document.createElement('span');
-    pgBadge.className = 'scope-pill plugin-badge';
-    pgBadge.title = 'Uses Package Gen Maven plugin';
-    pgBadge.innerHTML = '📦';
-    scope.appendChild(pgBadge);
-  }
-  
-  // Conflict marker
-  if (node.versionConflict) {
-    const conflictBadge = document.createElement('span');
-    conflictBadge.className = 'scope-pill conflict-badge';
-    conflictBadge.title = 'Version conflict detected';
-    conflictBadge.innerHTML = '⚠';
-    scope.appendChild(conflictBadge);
-  }
-  
-  // DUPLICATE JAR DETECTION (different versions across modules)
-  const ga = (node.groupId ? node.groupId + ':' : '') + node.artifactId;
-  if (node.artifactId && duplicateArtifacts[ga]) {
-    const dupBadge = document.createElement('span');
-    dupBadge.className = 'scope-pill dup-badge';
-    dupBadge.title = 'Multiple versions of this artifact used across modules';
-    dupBadge.innerHTML = '🔄';
-    scope.appendChild(dupBadge);
-  }
-
-  // Circular dependency marker
-  if (node.cycle) {
-    const cycleBadge = document.createElement('span');
-    cycleBadge.className = 'scope-pill err';
-    cycleBadge.title = 'Circular dependency detected (omitted to prevent recursion)';
-    cycleBadge.textContent = '↺ cycle';
-    scope.appendChild(cycleBadge);
-  }
-
-  row.append(name, ver, scope);
-
-  // search match / dim
-  const q = (query || '').toLowerCase();
-  const hay = (node.groupId + ':' + node.artifactId + ':' + node.version).toLowerCase();
-  const isMatch = q && hay.includes(q);
-  if (q) {
-    if (isMatch) li.classList.add('match');
-    else li.classList.add('dim');
-  }
-  // expand path if a descendant matches
-  let anyDescMatch = false;
-  if (node.children && node.children.length) {
-    const ul = document.createElement('ul');
-    ul.className = 'tree';
-    for (const c of node.children) {
-      const childLi = renderTree(ul, c, query, level + 1);
-      if (childLi.dataset.match === 'true') anyDescMatch = true;
-    }
-    li.appendChild(ul);
-  }
-  if (isMatch || anyDescMatch) li.dataset.match = 'true';
-  else li.dataset.match = isMatch ? 'true' : 'false';
-  container.appendChild(li);
+function makeNode(node, options = {}) {
+  const li = document.createElement('li'); li.className = 'node';
+  const row = document.createElement('button'); row.type = 'button'; row.className = 'row tree-toggle';
+  row.style.paddingLeft = `${(options.level || 0) * 18}px`; row.setAttribute('aria-expanded', 'false');
+  const hasChildren = Boolean(node.children && node.children.length);
+  const caret = document.createElement('span'); caret.className = 'caret'; caret.textContent = hasChildren ? '▶' : '•';
+  const name = document.createElement('span'); name.className = 'name'; name.textContent = label(node);
+  row.append(caret, name); addBadge(row, node.version, 'version-pill'); addBadge(row, node.scope || 'compile');
+  addBadge(row, nodeKind(node), `node-kind ${nodeKind(node)}`); addVersionMarkers(row, node); li.appendChild(row);
+  if (!hasChildren) { row.disabled = true; row.classList.add('leaf'); return li; }
+  const children = document.createElement('ul'); children.className = 'tree hidden'; children.style.display = 'none'; li.appendChild(children);
+  row.addEventListener('click', () => {
+    const open = children.style.display !== 'none';
+    if (open) { children.style.display = 'none'; children.classList.add('hidden'); row.setAttribute('aria-expanded', 'false'); caret.textContent = '▶'; return; }
+    if (!children.dataset.rendered) { appendChildren(children, node, (options.level || 0) + 1); children.dataset.rendered = 'true'; }
+    children.style.display = ''; children.classList.remove('hidden'); row.setAttribute('aria-expanded', 'true'); caret.textContent = '▼';
+  });
+  if (options.expand) row.click();
   return li;
 }
 
-function toggleModule(head) {
-  const body = head.nextElementSibling;
-  if (!body) return;
-  const open = body.style.display !== 'none' && !body.classList.contains('hidden');
-  body.style.display = open ? 'none' : '';
-  body.classList.toggle('hidden', open);
-  head.querySelector('.caret').textContent = open ? '▶' : '▼';
-  if (!open && body.id === '') {
-    // already rendered - just ensure it's visible
-    body.style.display = '';
+function appendChildren(container, node, level, start = 0) {
+  const children = node.children || []; const end = Math.min(start + BRANCH_PAGE_SIZE, children.length);
+  for (let i = start; i < end; i += 1) container.appendChild(makeNode(children[i], {level}));
+  if (end >= children.length) return;
+  const more = document.createElement('button'); more.type = 'button'; more.className = 'btn tree-more';
+  more.textContent = `Show ${Math.min(BRANCH_PAGE_SIZE, children.length - end)} more (${children.length - end} remaining)`;
+  more.addEventListener('click', () => { more.remove(); appendChildren(container, node, level, end); }); container.appendChild(more);
+}
+
+function renderModule(body) {
+  if (body.dataset.rendered === 'full') return;
+  const module = MODULES[Number(body.dataset.moduleIndex)]; const tree = body.querySelector('ul'); tree.replaceChildren();
+  if (!module.tree) tree.textContent = 'No resolved library dependencies'; else tree.appendChild(makeNode(module.tree, {level: 0, expand: true}));
+  body.dataset.rendered = 'full';
+}
+function setModuleOpen(card, open) {
+  const head = card.querySelector('.module-head'); const body = card.querySelector('.tree-body');
+  if (!body || head.classList.contains('err')) return;
+  if (open && !body.dataset.rendered) renderModule(body);
+  body.style.display = open ? '' : 'none'; body.classList.toggle('hidden', !open);
+  head.setAttribute('aria-expanded', String(open)); head.querySelector('.caret').textContent = open ? '▼' : '▶';
+}
+
+function searchTree(node, query, level, budget) {
+  const selfMatch = label(node).toLowerCase().includes(query); const childResults = [];
+  for (const child of (node.children || [])) { const result = searchTree(child, query, level + 1, budget); if (result) childResults.push(result); }
+  if (!selfMatch && !childResults.length) return null;
+  if (budget.rendered >= SEARCH_NODE_LIMIT) { budget.truncated = true; return null; }
+  budget.rendered += 1;
+  const li = makeNode({...node, children: []}, {level}); if (selfMatch) li.classList.add('match');
+  if (childResults.length) { const branch = document.createElement('ul'); branch.className = 'tree'; childResults.forEach(child => branch.appendChild(child)); li.appendChild(branch); }
+  return li;
+}
+function runSearch(value) {
+  const query = value.trim().toLowerCase(); const count = document.getElementById('count');
+  document.querySelectorAll('.module-card').forEach(card => setModuleOpen(card, false));
+  if (!query) {
+    document.querySelectorAll('.tree-body').forEach(body => { delete body.dataset.rendered; body.querySelector('ul').replaceChildren(); });
+    count.textContent = ''; return;
   }
-}
-
-function toggleAll(expanded) {
-  const bodies = document.querySelectorAll('.tree-body');
-  bodies.forEach(body => {
-    body.style.display = expanded ? '' : 'none';
-    body.classList.toggle('hidden', !expanded);
+  let matches = 0; const budget = {rendered: 0, truncated: false};
+  document.querySelectorAll('.tree-body').forEach(body => {
+    const module = MODULES[Number(body.dataset.moduleIndex)]; const tree = body.querySelector('ul'); tree.replaceChildren(); if (!module.tree) return;
+    const result = searchTree(module.tree, query, 0, budget); if (!result) return;
+    matches += result.querySelectorAll('.match').length + (result.classList.contains('match') ? 1 : 0); tree.appendChild(result); body.dataset.rendered = 'search'; setModuleOpen(body.closest('.module-card'), true);
   });
-  const carets = document.querySelectorAll('.caret');
-  carets.forEach(caret => {
-    caret.textContent = expanded ? '▼' : '▶';
-  });
+  count.textContent = `${matches} match${matches === 1 ? '' : 'es'}${budget.truncated ? ' (first 500 matching branches shown)' : ''}`;
 }
-
-function buildAll(query) {
-  const trees = document.querySelectorAll('.tree-body');
-  trees.forEach((body) => {
-    if (!body) return;
-    const ul = body.querySelector('ul');
-    ul.innerHTML = '';
-    const m = MODULES[Number(body.dataset.moduleIndex)];
-    if (m.tree) {
-      renderTree(ul, m.tree, query);
-      if (!m.tree.children || m.tree.children.length === 0) {
-        const empty = document.createElement('li');
-        empty.className = 'small';
-        empty.textContent = 'No resolved library dependencies';
-        ul.appendChild(empty);
-      }
-      // if searching, auto-open
-      if (query) body.style.display = '';
-    }
-  });
-  const cnt = document.getElementById('count');
-  if (query) {
-    const matches = document.querySelectorAll('.node.match').length;
-    cnt.textContent = matches + ' match' + (matches===1?'':'es');
-  } else cnt.textContent = '';
+function collapseAll() { document.querySelectorAll('.module-card').forEach(card => setModuleOpen(card, false)); document.getElementById('count').textContent = ''; }
+function expandSafely() {
+  const cards = [...document.querySelectorAll('.module-card')].filter(card => !card.querySelector('.module-head').classList.contains('err'));
+  cards.slice(0, SAFE_MODULE_EXPANSION_LIMIT).forEach(card => setModuleOpen(card, true)); const skipped = Math.max(0, cards.length - SAFE_MODULE_EXPANSION_LIMIT);
+  document.getElementById('count').textContent = skipped ? `Opened ${SAFE_MODULE_EXPANSION_LIMIT} modules; ${skipped} remain collapsed to protect the browser.` : `Opened ${cards.length} module${cards.length === 1 ? '' : 's'}; branches remain lazy.`;
 }
-
-function reload() {
-  fetch('/api/reload', {method:'POST'}).then(r=>r.json()).then(()=>location.reload());
-}
-
-// search handler
-document.getElementById('search').addEventListener('input', (e) => {
-  buildAll(e.target.value);
-});
-
-// initial render: collapse all, show first module expanded
-window.addEventListener('DOMContentLoaded', () => {
-  buildAll('{{ query }}');
-  // expand the first non-error module
-  const first = document.querySelector('.module-head:not(.err)');
-  if (first) toggleModule(first);
-  document.querySelector('main').dataset.rendered = 'true';
-});
+function reload() { fetch('/api/reload', {method:'POST'}).then(r => r.json()).then(() => location.reload()); }
+document.querySelectorAll('.module-card').forEach(card => card.querySelector('.module-head').addEventListener('click', () => { const body = card.querySelector('.tree-body'); if (body) setModuleOpen(card, body.style.display === 'none'); }));
+document.getElementById('collapse-all').addEventListener('click', collapseAll); document.getElementById('expand-safe').addEventListener('click', expandSafely);
+let searchTimer; document.getElementById('search').addEventListener('input', event => { clearTimeout(searchTimer); searchTimer = setTimeout(() => runSearch(event.target.value), 150); });
+window.addEventListener('DOMContentLoaded', () => { if (document.getElementById('search').value.trim()) runSearch(document.getElementById('search').value); document.querySelector('main').dataset.rendered = 'true'; });
 </script>
 {% endblock %}
