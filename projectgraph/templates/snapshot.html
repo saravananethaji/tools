@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Dependency Snapshot · Maven Graph{% endblock %}
+{% block content %}
+<div class="card">
+  <h2 style="margin:.2rem 0 .4rem;">Dependency Snapshot</h2>
+  <p class="small">A portable, versioned copy of the currently loaded dependency graph. It contains resolved dependencies, paths, scopes, conflicts, and scan metadata — not source files or Maven caches.</p>
+  <p class="small">Imported snapshots are historical and read-only. To refresh data on this machine, load a local folder and run Maven again.</p>
+  <a class="btn" href="/snapshot/download">Download Dependency Snapshot</a>
+</div>
+
+<div class="card">
+  <h3 style="margin:.2rem 0 .6rem;">Open Dependency Snapshot</h3>
+  <form id="snapshot-form">
+    <input type="file" id="snapshot-file" accept=".json,application/json" required>
+    <button class="btn" type="submit">Open snapshot</button>
+    <span id="snapshot-status" class="small"></span>
+  </form>
+</div>
+
+<script>
+document.getElementById('snapshot-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const file = document.getElementById('snapshot-file').files[0];
+  const status = document.getElementById('snapshot-status');
+  if (!file) return;
+  status.textContent = 'opening…'; status.className = 'small';
+  const data = new FormData(); data.append('file', file);
+  try {
+    const response = await fetch('/api/snapshot/load', {method: 'POST', body: data});
+    const result = await response.json();
+    if (!response.ok || !result.ok) throw new Error(result.error || 'could not open snapshot');
+    status.textContent = `✓ ${result.modules} module${result.modules === 1 ? '' : 's'} loaded`;
+    status.className = 'small ok';
+    setTimeout(() => location.href = '/tree', 300);
+  } catch (error) {
+    status.textContent = '✗ ' + error.message; status.className = 'small err';
+  }
+});
+</script>
+{% endblock %}

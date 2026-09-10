@@ -10,6 +10,7 @@ Routes:
   GET  /tree              -> tree view (option 1) with search (option 3)
   GET  /conflicts         -> conflicts view (option 2)
   GET  /inventory         -> OSS inventory view (P1.1)
+  GET  /snapshot          -> export/import portable dependency snapshots
   GET  /export            -> download .cypher script (option 4)
   POST  /api/reload        -> re-run Maven and refresh cache
   POST  /api/load          -> load/scan a root folder (body: {"root": "..."})
@@ -47,6 +48,7 @@ from oss_inventory import build_inventory
 from impact import blast_radius, dependency_routes
 from inventory_export import inventory_xlsx
 from scan_state import load_last_scan, save_last_scan
+from dependency_snapshot import export_snapshot, import_snapshot
 
 # Configure logging
 logging.basicConfig(
@@ -77,9 +79,12 @@ _restored_model = load_last_scan(LAST_SCAN_PATH)
 _state: dict = {
     "root": _restored_model.root if _restored_model else None,
     "model": _restored_model,
+    # Imported files are evidence from another scan, not a local Maven result.
+    "read_only_snapshot": False,
 }
 if _restored_model:
     logger.info("Restored last resolved scan: %s", _restored_model.root)
+templates.env.globals["snapshot_read_only"] = lambda: _state["read_only_snapshot"]
 
 
 def _validate_root_path(root: str) -> str:
@@ -233,6 +238,52 @@ async def inventory_download():
     )
 
 
+@app.get("/snapshot", response_class=HTMLResponse)
+async def snapshot_view(request: Request):
+    await _get_model()
+    return templates.TemplateResponse(request, "snapshot.html", {
+        "root": _state["root"] or _default_root(),
+    })
+
+
+@app.get("/snapshot/download")
+async def snapshot_download():
+    """Download a portable Dependency Snapshot, never an internal cache file."""
+    model = await _get_model()
+    content = json.dumps(export_snapshot(model), indent=2, sort_keys=True) + "\n"
+    return Response(
+        content=content,
+        media_type="application/json",
+        headers={"Content-Disposition": "attachment; filename=dependency-snapshot.json"},
+    )
+
+
+@app.post("/api/snapshot/load")
+async def api_load_snapshot(file: UploadFile = File(...)):
+    """Load a portable snapshot as read-only historical dependency data."""
+    if not file.filename or not file.filename.endswith(".json"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="Dependency Snapshot must be a .json file")
+    content = await file.read()
+    if len(content) > 50 * 1024 * 1024:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                            detail="Dependency Snapshot exceeds the 50 MB limit")
+    try:
+        model = import_snapshot(json.loads(content.decode("utf-8")))
+    except (UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail=f"Invalid Dependency Snapshot: {exc}")
+    _state["model"] = model
+    _state["root"] = model.root or "loaded-dependency-snapshot"
+    _state["read_only_snapshot"] = True
+    return JSONResponse({
+        "ok": True,
+        "modules": len(model.modules),
+        "source": model.source,
+        "read_only": True,
+    })
+
+
 @app.get("/api/impact")
 async def api_impact(coordinate: str, max_paths: int = 16):
     """Blast radius for an exact coordinate (P1.3).
@@ -344,6 +395,11 @@ async def export_download():
 
 @app.post("/api/reload")
 async def api_reload():
+    if _state["read_only_snapshot"]:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This is an imported Dependency Snapshot. Load a local folder before reloading Maven.",
+        )
     root = _validate_root_path(_state["root"] or _default_root())
     logger.info(f"Reload requested for: {root}")
     # Run blocking build_model in thread pool to avoid blocking event loop
@@ -364,6 +420,7 @@ async def api_load(root: str = Form(...)):
     model = await run_in_threadpool(build_model, abs_root, CACHE_DIR)
     _state["root"] = abs_root
     _state["model"] = model
+    _state["read_only_snapshot"] = False
     save_last_scan(LAST_SCAN_PATH, model)
     count = len(model.modules)
     logger.info(f"Load complete: {count} module(s)")
@@ -410,6 +467,7 @@ async def api_load_json(file: UploadFile = File(...)):
             )
         _state["model"] = model
         _state["root"] = model.root or "loaded-from-json"
+        _state["read_only_snapshot"] = True
         save_last_scan(LAST_SCAN_PATH, model)
         return JSONResponse({
             "ok": True,
@@ -557,6 +615,7 @@ async def api_load_json(file: UploadFile = File(...)):
     
     _state["model"] = model
     _state["root"] = model.root or "loaded-from-json"
+    _state["read_only_snapshot"] = True
     logger.info(f"Loaded {len(model.modules)} modules from JSON")
     return JSONResponse({
         "ok": True,

@@ -77,6 +77,7 @@
     <a href="/inventory">3 · OSS Inventory</a>
     <a href="/impact">4 · Impact</a>
     <a href="/export">5 · Neo4j Export</a>
+    <a href="/snapshot">6 · Snapshot</a>
   </nav>
   <form id="load-form">
     <input type="text" id="folder-path" placeholder="/path/to/java/projects"
@@ -85,6 +86,11 @@
     <span id="load-status"></span>
   </form>
 </header>
+{% if snapshot_read_only() %}
+<div class="card" style="margin:1rem 1.5rem 0; padding:.6rem .9rem;">
+  <span class="small">Loaded Dependency Snapshot — historical, read-only data. Load a local folder to run Maven again.</span>
+</div>
+{% endif %}
 <main>
 {% block content %}{% endblock %}
 </main>

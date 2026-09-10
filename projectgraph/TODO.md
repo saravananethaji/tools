@@ -58,6 +58,12 @@ verify another operating system.
   flagged). Exposed via `GET /api/inventory`, `GET /inventory`, and the
   `PROJECTGRAPH_INTERNAL_PREFIXES` env var. Covered by
   `tests/test_inventory.py` and the Playwright inventory test.
+  Excel export of the same inventory was added later: `GET /inventory/download`
+  produces a two-sheet workbook (Summary with total distinct external libraries
+  and groupId distribution, Inventory with the same columns as the web table),
+  built in `inventory_export.py` and covered by
+  `tests/test_inventory_export.py` plus a Playwright download test. It exports
+  the resolved inventory only, never the partial static POM view.
 - [x] **P1.2 Correct conflicts and version drift.** Compute them only from
   resolved, module-owned dependency data and show the paths responsible.
   `GraphModel.conflicts()` groups by Maven conflict identity
@@ -100,6 +106,22 @@ verify another operating system.
 - [ ] **P1.8 Add scan metadata and diagnostics.** Show scan time, source,
   completeness, Maven version, cache state, module counts, dependency counts,
   and actionable per-module errors.
+- [x] **P1.9 Add scan persistence and portable Dependency Snapshots.** Retained
+  across restarts: `scan_state.py` atomically saves the last *successful
+  resolved* scan and restores it on boot; a failed, empty, or partial static
+  scan deliberately leaves the previous good report intact (`can_persist`),
+  and corrupt or unsuitable snapshots are ignored. Portability:
+  `dependency_snapshot.py` exports `projectgraph.dependency-snapshot.v1`, which
+  wraps the canonical scan model with a stable format identifier while
+  stripping private cache metadata, so a graph can be moved to another machine
+  (`GET /snapshot/download`, `POST /api/snapshot/load`, `GET /snapshot`, nav
+  "6 · Snapshot"). Imported snapshots are marked read-only — they are another
+  scan's evidence, not a local Maven result — and `/api/reload` returns 409
+  rather than silently re-running Maven against them; loading a local folder
+  clears the flag. Unknown formats and schema mismatches are rejected. Covered
+  by `tests/test_scan_state.py`, `tests/test_dependency_snapshot.py`, and a
+  Playwright download/upload/read-only test.
+  Retained-scan cleanup and multi-scan comparison remain in P2.4.
 
 ### P1 exit gate
 

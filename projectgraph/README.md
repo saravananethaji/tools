@@ -2,7 +2,7 @@
 
 A Python (FastAPI) app that scans a folder of Java/Maven projects, runs
 `mvn --non-recursive dependency:tree -DoutputType=dot` per pom, and presents an interactive
-dependency graph with 6 capabilities:
+dependency graph with 7 capabilities:
 
 1. **Dependency tree** — per-module, fully expandable, full transitive depth.
    Each node shows `groupId:artifactId:version` + scope.
@@ -12,7 +12,7 @@ dependency graph with 6 capabilities:
    versions) or `drift` (different modules, different versions), with the
    responsible dependency path shown for each occurrence.
 3. **OSS Inventory** — resolved external (open-source) coordinates by
-   consuming module, scope, and direct/transitive path.
+   consuming module, scope, and direct/transitive path, with **Excel export**.
 4. **Impact** — enter a coordinate (from `groupId:artifactId` up to a fully
    qualified variant) to see affected modules, the dependency that introduces
    it, the paths responsible, and the source POMs.
@@ -20,6 +20,12 @@ dependency graph with 6 capabilities:
    nodes and dims the rest.
 6. **Neo4j export** — the whole graph as a `.cypher` script of `MERGE`
    statements (nodes `:Artifact`, edges `:DEPENDS_ON` with `scope`).
+7. **Dependency Snapshot** — export and reopen a portable, versioned copy of
+   the resolved graph on another machine.
+
+The web navigation uses the same order as the list above, minus Search, which
+lives inside the Dependency Tree page: `1 · Dependency Tree`, `2 · Conflicts`,
+`3 · OSS Inventory`, `4 · Impact`, `5 · Neo4j Export`, `6 · Snapshot`.
 
 ## Layout
 
@@ -29,11 +35,15 @@ projectgraph/
   maven_runner.py   pom discovery, mvn exec, DOT->tree, on-disk JSON cache
   graph_model.py    in-memory tree model + conflict detection
   neo4j_export.py   .cypher script generator
-  templates/        Jinja2 HTML (base, tree, conflicts, inventory, impact, export)
+  templates/        Jinja2 HTML (base, tree, conflicts, inventory, impact,
+                    snapshot, export)
   cache/            on-disk JSON cache (auto-created)
   parser.py         (pre-existing DOT + Neo4j Bolt ingester, unchanged)
   oss_inventory.py  resolved OSS inventory (external coords, paths, prefixes)
+  inventory_export.py Excel workbook export of the resolved inventory
   impact.py         in-memory blast-radius and dependency-route queries
+  scan_state.py     persist/restore the last successful resolved scan
+  dependency_snapshot.py portable, versioned snapshot export/import
   maven_extractor.py offline POM extractor + coordinate-location analysis
   trace_ancestors.py parent-POM chain tracing for remediation guidance
   sbom_export.py    (offline/partial) static SBOM, OSV, version drift
@@ -58,6 +68,15 @@ currently loaded folder and refreshes its cache. The app retains exactly one
 last successful Maven-resolved scan in its local cache; after a server restart
 all tabs reopen against that saved report. A new successful load replaces it.
 Reload still requires that source folder to exist and be allowed.
+
+### Move a dependency graph to another machine
+
+Use **6 · Snapshot** → **Download Dependency Snapshot**. This downloads a
+portable `dependency-snapshot.json`, not the internal cache. On the other
+machine, open **6 · Snapshot**, choose the file, and select **Open snapshot**.
+The imported graph is historical and read-only: it keeps the original scan's
+paths and resolved dependencies, but cannot be refreshed until you load a
+local source folder and scan it with Maven.
 
 ### macOS / Linux
 

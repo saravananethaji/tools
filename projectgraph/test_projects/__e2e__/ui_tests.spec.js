@@ -250,4 +250,28 @@ test.describe('Maven Project Graph - UI Tests', () => {
     expect(response.headers()['content-disposition']).toContain('oss-inventory.xlsx');
     expect((await response.body()).subarray(0, 2).toString()).toBe('PK');
   });
+
+  test('Dependency Snapshot downloads, uploads, and becomes read-only', async ({ page }, testInfo) => {
+    await page.goto(`${BASE_URL}/snapshot`);
+    await page.waitForLoadState('networkidle');
+    await expect(page.getByRole('link', { name: 'Download Dependency Snapshot' })).toBeVisible();
+
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      page.getByRole('link', { name: 'Download Dependency Snapshot' }).click(),
+    ]);
+    expect(download.suggestedFilename()).toBe('dependency-snapshot.json');
+    const snapshotPath = testInfo.outputPath('dependency-snapshot.json');
+    await download.saveAs(snapshotPath);
+
+    await page.setInputFiles('#snapshot-file', snapshotPath);
+    await page.getByRole('button', { name: 'Open snapshot' }).click();
+    await page.waitForURL('**/tree');
+    await expect(page.locator('body')).toContainText(
+      'Loaded Dependency Snapshot — historical, read-only data');
+
+    // The imported graph cannot be mistaken for a local Maven scan.
+    const reload = await page.request.post(`${BASE_URL}/api/reload`);
+    expect(reload.status()).toBe(409);
+  });
 });
