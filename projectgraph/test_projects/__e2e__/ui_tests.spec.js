@@ -237,4 +237,17 @@ test.describe('Maven Project Graph - UI Tests', () => {
       }
     }
   });
+
+  test('OSS inventory downloads an Excel workbook with a summary', async ({ page }) => {
+    await page.goto(`${BASE_URL}/inventory`);
+    await page.locator('main[data-rendered="true"]').waitFor();
+    await expect(page.getByRole('link', { name: 'Download Excel' })).toHaveAttribute(
+      'href', '/inventory/download');
+    const response = await page.request.get(`${BASE_URL}/inventory/download`);
+    expect(response.ok()).toBeTruthy();
+    expect(response.headers()['content-type']).toContain(
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    expect(response.headers()['content-disposition']).toContain('oss-inventory.xlsx');
+    expect((await response.body()).subarray(0, 2).toString()).toBe('PK');
+  });
 });

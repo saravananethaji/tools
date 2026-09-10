@@ -15,6 +15,7 @@
     {{ ", " ~ inventory.excluded_modules | length ~ " excluded" if inventory.excluded_modules else "" }}
   </p>
   <button class="btn" onclick="reload()">↻ Reload</button>
+  <a class="btn" href="/inventory/download">Download Excel</a>
 </div>
 
 {% if inventory.excluded_modules %}

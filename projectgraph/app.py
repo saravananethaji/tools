@@ -24,7 +24,7 @@ import sys
 from pathlib import Path
 
 from fastapi import FastAPI, Request, Form, HTTPException, status, UploadFile, File
-from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, JSONResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.concurrency import run_in_threadpool
@@ -45,6 +45,7 @@ from neo4j_export import export_cypher
 from pom_parser import parse_pom, PomInfo, Dependency, Plugin, ParentInfo
 from oss_inventory import build_inventory
 from impact import blast_radius, dependency_routes
+from inventory_export import inventory_xlsx
 from scan_state import load_last_scan, save_last_scan
 
 # Configure logging
@@ -216,6 +217,20 @@ async def inventory_view(request: Request):
         "inventory": inventory,
         "root": _state["root"] or _default_root(),
     })
+
+
+@app.get("/inventory/download")
+async def inventory_download():
+    """Download the current resolved OSS inventory as an Excel workbook."""
+    model = await _get_model()
+    inventory = await run_in_threadpool(build_inventory, model)
+    content = await run_in_threadpool(inventory_xlsx, inventory)
+    return Response(
+        content=content,
+        media_type=("application/vnd.openxmlformats-officedocument."
+                    "spreadsheetml.sheet"),
+        headers={"Content-Disposition": "attachment; filename=oss-inventory.xlsx"},
+    )
 
 
 @app.get("/api/impact")

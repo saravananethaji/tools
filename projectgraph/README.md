@@ -133,7 +133,17 @@ which it is reached.
 ```
 GET  /inventory         -> table view (also linked as "3 · OSS Inventory")
 GET  /api/inventory     -> the same data as JSON
+GET  /inventory/download -> Excel workbook for the current resolved inventory
 ```
+
+Use **Download Excel** on the Inventory page to export two sheets:
+
+- **Summary**: total distinct external libraries, scan completeness, excluded
+  module count, and distribution by exact Maven `groupId`.
+- **Inventory**: the same consumer-level columns shown in the web table
+  (coordinate, version, consumer, relationship, scopes, dependency path) plus
+  PURL. A library reached through several paths keeps those bounded paths in
+  one Excel cell.
 
 Internal group IDs are detected from the scanned projects' own groupIds plus
 any configured prefixes:
