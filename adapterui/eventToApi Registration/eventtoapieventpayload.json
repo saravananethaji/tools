@@ -1,0 +1,14 @@
+{
+  "eventId": "8526cd2c-0d22-11eb-adc1-0242ac120002",
+  "dateTime": 1576074808386, 
+  "correlationId": "8426cde0-0d22-11eb-adc1-0242ac120002",
+  "priority":0,
+  "status":"new",
+  "eventType":"createsepapayment",
+  "payload":{
+  "debitAccountIBAN": "GB38DEMO60161300011215",
+  "paymentCurrencyId":"EUR",
+  "amount":"100",
+  "beneficiaryIBAN":"DE28512305000018118508"
+  }
+}

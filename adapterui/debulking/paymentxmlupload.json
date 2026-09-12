@@ -1,0 +1,95 @@
+{
+  "type": "DEBULKING",
+  "name": "PAYMENTXML",
+  "status": "START",
+  "templates": [
+    {
+      "id": "direct:debulking.xml.preprocess",
+      "type": "PREPROCESS",
+      "inputParameters": [
+        {
+          "name": "data.filepath",
+          "value": "/var/lib/processed"
+        },
+        {
+          "name": "data.filename",
+          "value": "payment.xml"
+        },
+        {
+          "name": "process.routeId",
+          "value": "direct:debulking.xml.preprocess"
+        },
+        {
+          "name": "token",
+          "value": "row"
+        },
+        {
+          "name": "expectedRecordCount",
+          "value": "100"
+        },
+        {
+          "name": "data.split.size",
+          "value": "3"
+        }
+      ],
+      "defaultParameters": []
+    },
+    {
+      "id": "direct:debulking.xml.api.process",
+      "type": "PROCESS",
+      "inputParameters": [
+        {
+          "name": "process.routeId",
+          "value": "direct:debulking.xml.api.process"
+        },
+        {
+          "name": "result.filename",
+          "value": "paymentxml_result.csv"
+        },
+        {
+          "name": "httpRequestType",
+          "value": "POST"
+        },
+        {
+          "name": "https.config",
+          "value": "false"
+        },
+        {
+          "name": "httpEndPoint",
+          "value": "http://mockip:3000/irf-provider-container/api/v1.0.0/order/paymentOrders/sepaInstantPayment"
+        },
+        {
+          "name": "xslt.transform.spec",
+          "value": "PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4NCjx4c2w6c3R5bGVzaGVldCB2ZXJzaW9uPSIxLjAiICAgeG1sbnM6eHNsPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5L1hTTC9UcmFuc2Zvcm0iPg0KPHhzbDp0ZW1wbGF0ZSBtYXRjaD0iLyI+DQo8cm93Pg0KPGJvZHk+DQo8ZGViaXRBY2NvdW50SUJBTj4NCjx4c2w6dmFsdWUtb2YgICBzZWxlY3Q9Ii9yb3cvZGViaXRBY2NvdW50SUJBTiIvPg0KPC9kZWJpdEFjY291bnRJQkFOPg0KPHBheW1lbnRDdXJyZW5jeUlkPg0KPHhzbDp2YWx1ZS1vZiAgIHNlbGVjdD0iL3Jvdy9wYXltZW50Q3VycmVuY3lJZCIvPg0KPC9wYXltZW50Q3VycmVuY3lJZD4NCjxhbW91bnQ+DQo8eHNsOnZhbHVlLW9mICAgc2VsZWN0PSIvcm93L2Ftb3VudCIvPg0KPC9hbW91bnQ+DQo8YmVuZWZpY2lhcnlJQkFOPg0KPHhzbDp2YWx1ZS1vZiAgIHNlbGVjdD0iL3Jvdy9iZW5lZmljaWFyeUlCQU4iLz4NCjwvYmVuZWZpY2lhcnlJQkFOPg0KPC9ib2R5Pg0KPC9yb3c+DQo8L3hzbDp0ZW1wbGF0ZT4NCjwveHNsOnN0eWxlc2hlZXQ+"
+        },
+        {
+          "name": "output.folder",
+          "value": "/var/lib/processed"
+        },
+        {
+          "name": "outputfileFields",
+          "value": "header,body,error"
+        },
+        {
+          "name": "recordIdField",
+          "value": "body.debitAccountIBAN"
+        },
+        {
+          "name": "csvHeaders",
+          "value": "header/id,header/transactionStatus,header/audit/T24_time,header/audit/requestParse_time,header/audit/versionNumber,header/audit/responseParse_time,header/status,body/paymentCurrencyId,body/paymentScheme,body/amount,body/orderingCustomerId,body/debitCurrency,body/debitAccountIBAN,body/orderingCustomerAddress,body/endToEndReference,body/beneficiaryIBAN,body/debitAccountId,body/orderingCustomerName,body/paymentOrderProductId,error/type,error/errorDetails[]fieldName,error/errorDetails[]code,error/errorDetails[]message,error/code,error/message"
+        }
+      ],
+      "defaultParameters": []
+    },
+    {
+      "id": "direct:debulking.xml.api.postprocess",
+      "type": "POSTPROCESS",
+      "inputParameters": [],
+      "defaultParameters": []
+    }
+  ],
+  "parameters": {
+    "output.generation.stage": "preprocess"
+  },
+  "cronExpression": "0 */2 * ? * *"
+}
