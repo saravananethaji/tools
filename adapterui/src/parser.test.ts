@@ -10,7 +10,8 @@ const registration = () => parseRegistration(registrationInput).registration!;
 describe('static review parser', () => {
   it('parses and matches a valid contract', () => {
     const decoded = decodeTemplate(template()).decoded!; const instance = registration().templates[0]; const parameters = effectiveParameters(template(), instance, decoded);
-    expect(decoded.routes[0].from).toBe('direct:start'); expect(parameters[0].xmlReferences).toHaveLength(1); expect(validateCrossArtifact(template(), instance, decoded, parameters).some((item) => item.id === 'PARAM_MISSING')).toBe(false);
+    const reference = decoded.references[0];
+    expect(decoded.routes[0].from).toBe('direct:start'); expect(parameters[0].xmlReferences).toHaveLength(1); expect(reference).toMatchObject({ kind: 'exchangeProperty', name: 'httpEndPoint', routeId: 'r', step: '<simple>', purpose: 'Controls a choice condition', location: 'Route r → <simple>' }); expect(reference.location).not.toContain('offset'); expect(validateCrossArtifact(template(), instance, decoded, parameters).some((item) => item.id === 'PARAM_MISSING')).toBe(false);
   });
   it('rejects malformed JSON, Base64, XML, and DTD before XML parsing', () => {
     expect(parseJson('{', 'test').findings[0].id).toBe('JSON_SYNTAX');
@@ -26,6 +27,12 @@ describe('static review parser', () => {
   it('validates nested registration objects instead of casting them', () => {
     const bad = parseRegistration({ ...registrationInput, templates: [{ id: 'x', type: 'PROCESS', inputParameters: 'not-array', defaultParameters: [] }] });
     expect(bad.findings.some((item) => item.id === 'PARAMETERS_SHAPE')).toBe(true); expect(bad.registration?.templates[0].inputParameters).toEqual([]);
+  });
+  it('shows fully qualified classes for local bean declarations and separates unresolved references', () => {
+    const source = '<beans xmlns="http://www.springframework.org/schema/beans"><bean id="localTransformer" class="com.example.adapter.LocalTransformer"/><camelContext xmlns="http://camel.apache.org/schema/spring"><route id="r"><from uri="direct:start"/><bean ref="sharedProcessor"/><bean ref="sharedProcessor"/></route></camelContext></beans>';
+    const decoded = decodeTemplate({ ...template(), xmlRoute: btoa(source) }).decoded!;
+    expect(decoded.beans).toEqual(expect.arrayContaining(['Local bean localTransformer → com.example.adapter.LocalTransformer', 'Bean reference sharedProcessor (class is declared outside this template)']));
+    expect(decoded.beans.filter((bean) => bean.includes('sharedProcessor'))).toHaveLength(1);
   });
   it('uses template defaults provisionally and keeps undeclared values distinct', () => {
     const decoded = decodeTemplate(template()).decoded!; const instance = { ...registration().templates[0], inputParameters: [...registration().templates[0].inputParameters, { name: 'unknown', value: 'x', raw: { name: 'unknown', value: 'x' } }] };

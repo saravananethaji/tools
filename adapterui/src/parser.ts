@@ -76,18 +76,35 @@ function redactSecrets(xml: string): string { return xml.replace(/(\b(?:password
 function nodeLocation(element: Element): string { return `<${element.localName || element.nodeName}${element.getAttribute('id') ? ` id="${element.getAttribute('id')}"` : ''}>`; }
 function toTree(element: Element): XmlNode { return { name: element.localName || element.nodeName, attributes: Object.fromEntries(Array.from(element.attributes).map((attribute) => [attribute.name, attribute.value])), text: Array.from(element.childNodes).filter((node) => node.nodeType === Node.TEXT_NODE).map((node) => node.textContent?.trim() ?? '').filter(Boolean).join(' ') || undefined, location: nodeLocation(element), children: Array.from(element.children).map(toTree) }; }
 
-function expressionReferences(xml: string): ExpressionReference[] {
-  return [...xml.matchAll(/\$\{([^}]+)\}/g)].map((match) => {
-    const expression = match[1].trim(); const location = `offset ${match.index ?? 0}`;
-    const exchangeProperty = expression.match(/^exchangeProperty\.([A-Za-z0-9_.-]+)/);
-    const header = expression.match(/^header\.([A-Za-z0-9_.-]+)/);
-    if (exchangeProperty) return { kind: 'exchangeProperty', name: exchangeProperty[1], expression, location };
-    if (header) return { kind: 'header', name: header[1], expression, location };
-    if (/^body(?:[.[]|$)/.test(expression)) return { kind: 'body', expression, location };
-    if (/^exchange(?:[.[]|$)/.test(expression)) return { kind: 'exchange', expression, location };
-    if (/^exception(?:[?.[]|$)/.test(expression)) return { kind: 'exception', expression, location };
-    return { kind: 'unknown', expression, location };
+function routeIdFor(element: Element): string | undefined { let current: Element | null = element; while (current) { if (current.localName === 'route') return current.getAttribute('id') ?? undefined; current = current.parentElement; } return undefined; }
+function purposeFor(element: Element, attribute?: string): string {
+  if (element.localName === 'to' || element.localName === 'toD') return 'Sends the message to an endpoint';
+  if (element.localName === 'setHeader') return `Sets header ${element.getAttribute('name') ?? '(unnamed)'}`;
+  if (element.localName === 'setProperty') return `Sets exchange property ${element.getAttribute('name') ?? '(unnamed)'}`;
+  if (element.localName === 'log') return 'Writes a message to the Camel log';
+  if (element.localName === 'simple' && element.parentElement?.localName === 'when') return 'Controls a choice condition';
+  if (element.localName === 'simple') return 'Evaluates a Camel Simple expression';
+  return attribute ? `Used by <${element.localName}> attribute ${attribute}` : `Used by <${element.localName}>`;
+}
+function expressionReferences(document: Document): ExpressionReference[] {
+  const references: ExpressionReference[] = [];
+  Array.from(document.querySelectorAll('*')).forEach((element) => {
+    const sources: Array<{ value: string; attribute?: string }> = Array.from(element.attributes).map((attribute) => ({ value: attribute.value, attribute: attribute.name }));
+    const directText = Array.from(element.childNodes).filter((node) => node.nodeType === Node.TEXT_NODE).map((node) => node.textContent ?? '').join('');
+    if (directText) sources.push({ value: directText });
+    sources.forEach(({ value, attribute }) => [...value.matchAll(/\$\{([^}]+)\}/g)].forEach((match) => {
+      const expression = match[1].trim(); const routeId = routeIdFor(element); const step = `<${element.localName}>${attribute ? ` @${attribute}` : ''}`; const location = `${routeId ? `Route ${routeId}` : 'Outside a route'} → ${step}`;
+      const base = { expression, routeId, step, purpose: purposeFor(element, attribute), location };
+      const exchangeProperty = expression.match(/^exchangeProperty\.([A-Za-z0-9_.-]+)/); const header = expression.match(/^header\.([A-Za-z0-9_.-]+)/);
+      if (exchangeProperty) references.push({ ...base, kind: 'exchangeProperty', name: exchangeProperty[1] });
+      else if (header) references.push({ ...base, kind: 'header', name: header[1] });
+      else if (/^body(?:[.[]|$)/.test(expression)) references.push({ ...base, kind: 'body' });
+      else if (/^exchange(?:[.[]|$)/.test(expression)) references.push({ ...base, kind: 'exchange' });
+      else if (/^exception(?:[?.[]|$)/.test(expression)) references.push({ ...base, kind: 'exception' });
+      else references.push({ ...base, kind: 'unknown' });
+    }));
   });
+  return references;
 }
 
 export function decodeTemplate(template: TemplateDefinition): { decoded?: DecodedTemplate; findings: Finding[] } {
@@ -106,11 +123,16 @@ export function decodeTemplate(template: TemplateDefinition): { decoded?: Decode
   Array.from(document.querySelectorAll('[uri],to,toD,from')).forEach((element) => { const uri = element.getAttribute('uri'); if (!uri) findings.push(finding('DSL_URI_REQUIRED', 'Invalid', 'Camel DSL', 'template', `<${element.localName}> requires uri.`, nodeLocation(element))); else if ((uri.match(/\$\{/g) ?? []).length !== (uri.match(/\}/g) ?? []).length) findings.push(finding('DSL_URI_PLACEHOLDER', 'Invalid', 'Camel DSL', 'template', `Unbalanced dynamic placeholder in URI.`, nodeLocation(element))); });
   Array.from(document.querySelectorAll('simple')).forEach((element) => { if (!(element.textContent?.trim())) findings.push(finding('DSL_SIMPLE_EMPTY', 'Invalid', 'Camel DSL', 'template', 'simple expression must not be empty.', nodeLocation(element))); });
   const imports = Array.from(document.getElementsByTagNameNS('*', 'import')).map((node) => node.getAttribute('resource') ?? '');
-  const beans = Array.from(document.getElementsByTagNameNS('*', 'bean')).map((node) => node.getAttribute('id') ?? node.getAttribute('ref') ?? '');
+  const beans = Array.from(new Set(Array.from(document.getElementsByTagNameNS('*', 'bean')).map((node) => {
+    const id = node.getAttribute('id'); const reference = node.getAttribute('ref'); const className = node.getAttribute('class');
+    if (className) return `Local bean ${id ?? '(unnamed)'} → ${className}`;
+    if (reference) return `Bean reference ${reference} (class is declared outside this template)`;
+    return id ? `Local bean ${id} (class not specified)` : '(anonymous bean)';
+  })));
   const endpoints = Array.from(document.querySelectorAll('[uri]')).map((node) => node.getAttribute('uri')!).filter(Boolean);
   const securityFindings = /\b(?:password|keyPassword|secret|token)\s*=\s*["']/i.test(decoded.text) ? [finding('INLINE_SECRET', 'Warning', 'Security', 'template', 'Potential inline credential detected; rendered values are redacted.', '$.xmlRoute')] : [];
   findings.push(...securityFindings, finding('DSL_RULESET', 'Not verified', 'Camel DSL', 'template', `Static checks use ${CAMEL_STATIC_RULESET}; the deployed Camel schema version is not verified.`));
-  return { decoded: { xml: decoded.text, safeXml: redactSecrets(decoded.text), document, routes, imports, beans, endpoints, references: expressionReferences(decoded.text), securityFindings }, findings };
+  return { decoded: { xml: decoded.text, safeXml: redactSecrets(decoded.text), document, routes, imports, beans, endpoints, references: expressionReferences(document), securityFindings }, findings };
 }
 
 export function effectiveParameters(template: TemplateDefinition, instance: TemplateInstance, decoded: DecodedTemplate): EffectiveParameter[] {
