@@ -56,6 +56,7 @@ from dependency_snapshot import export_snapshot, import_snapshot
 from pom_topology import build_topology, module_relationships
 from scan_diagnostics import build_scan_diagnostics
 from resolution_preview import run_preview
+from advisories import report as advisory_report, refresh as refresh_advisories
 
 # Configure logging
 logging.basicConfig(
@@ -227,6 +228,32 @@ async def api_inventory():
     consuming module, scope, and direct/transitive path."""
     model = await _get_model()
     return JSONResponse(build_inventory(model))
+
+
+@app.get("/vulnerabilities", response_class=HTMLResponse)
+async def vulnerabilities_view(request: Request):
+    model = await _get_model()
+    return templates.TemplateResponse(request, "vulnerabilities.html", {
+        "report": await run_in_threadpool(advisory_report, model, CACHE_DIR),
+        "root": _state["root"] or _default_root(),
+    })
+
+
+@app.get("/api/vulnerabilities")
+async def api_vulnerabilities():
+    return JSONResponse(await run_in_threadpool(advisory_report, await _get_model(), CACHE_DIR))
+
+
+@app.post("/api/vulnerabilities/refresh")
+async def api_vulnerabilities_refresh():
+    """The only route allowed to contact OSV; ordinary scans stay local."""
+    if _state["read_only_snapshot"]:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail="Load a local Maven scan before refreshing advisories")
+    try:
+        return JSONResponse(await run_in_threadpool(refresh_advisories, await _get_model(), CACHE_DIR))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
 
 
 @app.get("/inventory", response_class=HTMLResponse)

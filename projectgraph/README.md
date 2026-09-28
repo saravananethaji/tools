@@ -34,6 +34,9 @@ dependency graph with 10 capabilities:
 10. **Resolution Preview** — tests one explicit existing Maven version control
    token in a temporary POM-only mirror, then shows only the changed resolved
    dependency paths. It never edits the selected workspace.
+11. **Vulnerabilities** — a user-triggered OSV refresh evaluates exact resolved
+   Maven versions and keeps GHSA/CVE evidence in a local SQLite cache. Page
+   loads and project scans never contact the advisory service.
 
 The web navigation uses the same order as the list above, minus Search and
 Scan health, which live inside the Dependency Tree page: `1 · Dependency Tree`,
@@ -77,6 +80,14 @@ reject folders outside `PROJECTGRAPH_ALLOWED_ROOTS`; that is intentional.
 4. Click **Load folder** and wait for the module count to appear.
 5. Use **Dependency Tree**, **Topology**, **Conflicts**, **OSS Inventory**,
    **Impact**, **Neo4j Export**, **Snapshot**, and **Resolution Preview**.
+
+### Check local advisory evidence
+
+Open **9 · Vulnerabilities** and select **Refresh advisory data**. This is the
+only action that contacts OSV; it evaluates the exact resolved external Maven
+versions in the current scan and stores the result locally. Later page loads
+use that local cache. A failed refresh preserves the previous data. No known
+match is not a guarantee that a component is safe.
 
 **Load folder** scans a different folder. **Reload** re-runs Maven for the
 currently loaded folder and refreshes its cache. The app retains exactly one

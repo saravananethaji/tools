@@ -118,9 +118,13 @@ verify another operating system.
 - [ ] **P1.6 Produce a validated CycloneDX SBOM.** Generate it from a completed
   resolved scan, validate against the pinned CycloneDX schema, and label any
   partial export visibly.
-- [ ] **P1.7 Add optional OSV enrichment.** Batch exact Maven coordinates,
+- [x] **P1.7 Add optional OSV enrichment.** Batch exact Maven coordinates,
   cache responses with timestamps, expose unknown/offline states, and link
   advisories to impact paths. No advisory result is not proof of safety.
+  The delivered local-first scope uses an explicit OSV refresh to evaluate the
+  current resolved Maven versions, then atomically retains GHSA/CVE evidence in
+  SQLite. Full offline OSV feed mirroring and NVD-only metadata enrichment are
+  deferred: neither justifies an untested Maven range evaluator.
 - [x] **P1.8 Improve tree usability.** The tree no longer builds every module
   and every transitive node at page load. It starts collapsed, renders a module
   root and its branches only when opened, and pages large sibling sets in

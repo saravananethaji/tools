@@ -243,6 +243,20 @@ test.describe('Maven Project Graph - UI Tests', () => {
     expect(body.detail || body.error).toContain('control point');
   });
 
+  test('vulnerabilities page stays local until the user explicitly refreshes', async ({ page }) => {
+    await page.goto(`${BASE_URL}/vulnerabilities`);
+    await page.waitForLoadState('networkidle');
+    await page.locator('main[data-rendered="true"]').waitFor();
+    await expect(page.locator('h2')).toContainText('Vulnerabilities');
+    await expect(page.getByRole('button', { name: '↻ Refresh advisory data' })).toBeVisible();
+    await expect(page.locator('main')).toContainText('missing match is never shown as safe');
+    const response = await page.request.get(`${BASE_URL}/api/vulnerabilities`);
+    expect(response.ok()).toBeTruthy();
+    const report = await response.json();
+    expect(['not_downloaded', 'ready', 'unavailable']).toContain(report.status);
+    expect(Array.isArray(report.findings)).toBeTruthy();
+  });
+
   test('conflicts view states resolved-only semantics', async ({ page }) => {
     await page.goto(`${BASE_URL}/conflicts`);
     await page.waitForLoadState('networkidle');

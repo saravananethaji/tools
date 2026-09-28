@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Vulnerabilities · ProjectGraph prototype</title>
+<style>
+:root{--bg:#0f1117;--panel:#171a23;--panel2:#1c2030;--line:#2a2f3a;--text:#e6e8ee;--muted:#969daf;--accent:#6ea8fe;--ok:#5fd193;--warn:#e0b070;--high:#ff9b9b;--critical:#ff6b6b}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}header{height:68px;display:flex;align-items:center;gap:26px;padding:0 28px;background:var(--panel);border-bottom:1px solid var(--line)}.brand{font-size:17px;font-weight:700}nav{display:flex;gap:18px;flex:1}nav span{color:var(--muted);white-space:nowrap}nav .active{color:var(--accent)}.root{color:var(--muted);font-size:12px}main{max-width:1380px;margin:0 auto;padding:28px}.card{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:18px 20px;margin-bottom:16px}.title{display:flex;align-items:flex-start;justify-content:space-between;gap:20px}.title h1{font-size:24px;margin:0 0 7px}.title p,.muted{color:var(--muted);margin:0;line-height:1.45}.btn{border:1px solid var(--line);border-radius:6px;background:#242a38;color:var(--text);padding:9px 13px;font-weight:600;cursor:pointer}.btn.primary{background:#2d5fa8;border-color:#4079c8}.btn:hover{border-color:var(--accent)}.state{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.dot{width:9px;height:9px;border-radius:50%;background:var(--ok)}.pill{font-size:12px;padding:3px 8px;border-radius:99px;background:#252c3a;color:var(--muted)}.pill.critical{background:#4a2328;color:#ffb4b4}.pill.high{background:#493722;color:#ffd397}.pill.unknown{background:#32313e;color:#c7c1dd}.notice{border-left:3px solid var(--accent);padding-left:13px;color:var(--muted)}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.stat{padding:14px;border-radius:7px;background:#11141b;border:1px solid var(--line)}.stat b{display:block;font-size:23px;margin-bottom:4px}.stat small{color:var(--muted)}.filters{display:flex;gap:9px;align-items:center;flex-wrap:wrap}.filters input{background:#0d1016;border:1px solid var(--line);border-radius:6px;color:var(--text);padding:9px 12px;min-width:310px}.filters button{font-size:12px}.filters .selected{border-color:var(--accent);color:var(--accent)}table{width:100%;border-collapse:collapse}th{text-align:left;color:var(--muted);font-size:11px;letter-spacing:.04em;text-transform:uppercase;padding:12px 10px;border-bottom:1px solid var(--line)}td{vertical-align:top;padding:15px 10px;border-bottom:1px solid var(--line)}td strong{display:block;margin-bottom:4px}.ids{display:flex;gap:5px;flex-wrap:wrap}.path{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#b9c6df;line-height:1.55}.path em{font-style:normal;color:var(--muted)}.link{color:var(--accent);text-decoration:none;font-size:12px;font-weight:600;margin-right:12px}.hidden{display:none}.details{margin-top:8px;padding:12px;background:#11141b;border-radius:6px;border:1px solid var(--line)}.details li{margin:6px 0;color:var(--muted)}.footer-note{font-size:12px;color:var(--muted);padding:3px 0}@media(max-width:960px){nav{display:none}.stats{grid-template-columns:repeat(2,1fr)}main{padding:16px}table{font-size:12px}}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">📦 Maven Dependency Graph</div>
+  <nav><span>1 · Dependency Tree</span><span>2 · Topology</span><span>3 · Conflicts</span><span>4 · OSS Inventory</span><span>5 · Impact</span><span>6 · Neo4j Export</span><span>7 · Snapshot</span><span>8 · Resolution Preview</span><span class="active">9 · Vulnerabilities</span></nav>
+  <div class="root">test_projects · Maven-resolved scan</div>
+</header>
+<main>
+  <section class="card title">
+    <div><h1>Vulnerabilities</h1><p>Matches resolved external Maven dependencies against your local advisory index. This is advisory evidence, not a claim that an application is exploitable.</p></div>
+    <div><button class="btn primary" id="refresh">↻ Refresh advisory data</button><div class="muted" style="font-size:12px;text-align:right;margin-top:7px">User-driven; scans never download feeds.</div></div>
+  </section>
+
+  <section class="card state" id="state"><span class="dot"></span><strong>Advisory data ready</strong><span class="pill">OSV Maven index</span><span class="muted">Last successful refresh: 29 Sep 2026, 10:42 · 8,426 records · source includes GHSA/CVE aliases</span></section>
+  <section class="card notice">The dependency scan is complete and Maven-resolved. Findings retain their actual dependency paths. <strong>“No advisory match” is not shown as safe.</strong></section>
+
+  <section class="stats">
+    <div class="stat"><b>164</b><small>resolved OSS libraries evaluated</small></div>
+    <div class="stat"><b style="color:var(--critical)">1</b><small>critical finding</small></div>
+    <div class="stat"><b style="color:var(--high)">3</b><small>high findings</small></div>
+    <div class="stat"><b style="color:var(--warn)">7</b><small>potential / unknown</small></div>
+  </section>
+
+  <section class="card" style="margin-top:16px">
+    <div class="filters"><input placeholder="Search library, GHSA, CVE, or module"><button class="btn selected">All 11</button><button class="btn">Critical 1</button><button class="btn">High 3</button><button class="btn">Potential 4</button><button class="btn">Unknown 3</button><button class="btn">Direct</button><button class="btn">Transitive</button></div>
+  </section>
+
+  <section class="card">
+    <table><thead><tr><th>Severity / advisory</th><th>Resolved library</th><th>Why it is present</th><th>Remediation evidence</th></tr></thead><tbody>
+      <tr>
+        <td><span class="pill critical">CRITICAL</span><div class="ids" style="margin-top:8px"><span class="pill">GHSA-jfh8-c2jp-5v3q</span><span class="pill">CVE-2021-44228</span></div></td>
+        <td><strong>org.apache.logging.log4j:log4j-core:2.14.1</strong><span class="muted">Maven · transitive · CVSS 10.0</span></td>
+        <td><div class="path">order-service <em>→</em> service-framework <em>→</em> log4j-core:2.14.1</div><span class="muted">Used by 6 modules</span></td>
+        <td><strong>First fixed: 2.17.1</strong><span class="muted">Affected range: &lt; 2.17.1</span><div style="margin-top:9px"><a class="link" href="#">Open GHSA ↗</a><a class="link" href="#">Impact</a><a class="link" href="#">Preview upgrade</a></div></td>
+      </tr>
+      <tr>
+        <td><span class="pill high">HIGH</span><div class="ids" style="margin-top:8px"><span class="pill">GHSA-35j2-fqrr-9h3f</span><span class="pill">CVE-2022-22965</span></div></td>
+        <td><strong>org.springframework:spring-beans:5.3.17</strong><span class="muted">Maven · direct · CVSS 9.8</span></td>
+        <td><div class="path">inventory-service <em>→</em> spring-beans:5.3.17</div><span class="muted">Direct dependency in inventory-service</span></td>
+        <td><strong>First fixed: 5.3.18</strong><span class="muted">Control may be an imported Spring BOM</span><div style="margin-top:9px"><a class="link" href="#">Open GHSA ↗</a><a class="link" href="#">Impact</a><a class="link" href="#">Preview upgrade</a></div></td>
+      </tr>
+      <tr>
+        <td><span class="pill unknown">POTENTIALLY AFFECTED</span><div class="ids" style="margin-top:8px"><span class="pill">CVE-2023-xxxx</span></div></td>
+        <td><strong>example:legacy-library:1.0.Final</strong><span class="muted">Maven · transitive</span></td>
+        <td><div class="path">payment-service <em>→</em> legacy-parent <em>→</em> legacy-library:1.0.Final</div></td>
+        <td><strong>Maven range evaluation pending</strong><span class="muted">Not treated as clean or affected until a Maven-compatible comparison is available.</span><div style="margin-top:9px"><a class="link" href="#">Open advisory ↗</a><a class="link" href="#">Impact</a></div></td>
+      </tr>
+    </tbody></table>
+  </section>
+  <div class="footer-note">Prototype only — sample advisory IDs, versions, counts, and paths are illustrative. The production page will display source timestamp, cache freshness, and scan completeness.</div>
+</main>
+<script>
+document.getElementById('refresh').onclick = () => {
+  const button = document.getElementById('refresh'), state = document.getElementById('state');
+  button.disabled = true; button.textContent = '↻ Refreshing…';
+  state.innerHTML = '<span class="dot" style="background:var(--accent)"></span><strong>Refreshing advisory data</strong><span class="muted">Downloading changed OSV Maven records, validating, then atomically updating the local index…</span>';
+  setTimeout(() => { button.disabled = false; button.textContent = '↻ Refresh advisory data'; state.innerHTML = '<span class="dot"></span><strong>Advisory data ready</strong><span class="pill">OSV Maven index</span><span class="muted">Last successful refresh: just now · existing index was kept available during refresh</span>'; }, 1400);
+};
+</script>
+</body>
+</html>
