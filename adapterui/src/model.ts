@@ -12,4 +12,15 @@ export type RouteSummary = { id?: string; from?: string; tree: XmlNode; processo
 export type ExpressionReference = { kind: 'exchangeProperty' | 'header' | 'body' | 'exchange' | 'exception' | 'unknown'; name?: string; expression: string; routeId?: string; step: string; purpose: string; location: string };
 export type DecodedTemplate = { xml: string; safeXml: string; document: Document; routes: RouteSummary[]; imports: string[]; beans: string[]; endpoints: string[]; references: ExpressionReference[]; securityFindings: Finding[] };
 export type EffectiveParameter = { name: string; declaration?: ParameterDeclaration; suppliedValue?: string; registrationDefault?: string; templateDefault?: string; provisionalValue?: string; state: 'Supplied' | 'Registration default' | 'Template default' | 'Missing' | 'Undeclared supplied'; xmlReferences: ExpressionReference[] };
-export type ReviewModel = { template: TemplateDefinition; registration: AdapterRegistration; instance: TemplateInstance; templateSource: SourceArtifact; registrationSource: SourceArtifact; decoded: DecodedTemplate; effectiveParameters: EffectiveParameter[]; findings: Finding[]; transformSpec?: unknown; transformEngine?: 'JOLT' | 'XSLT' };
+export type TemplateReference = {
+  templateId: string;
+  templateType: string;
+  templateName?: string;
+  templateFile?: string;
+  resolved: boolean;
+  routeId?: string;
+  routeIdMatchesTemplateId: boolean;
+  processRouteId?: string;
+  processRouteIdMatchesRouteId: boolean;
+};
+export type ReviewModel = { template: TemplateDefinition; registration: AdapterRegistration; instance: TemplateInstance; templateSource: SourceArtifact; registrationSource: SourceArtifact; decoded: DecodedTemplate; effectiveParameters: EffectiveParameter[]; findings: Finding[]; transformSpec?: unknown; transformEngine?: 'JOLT' | 'XSLT'; templateReferences?: TemplateReference[] };

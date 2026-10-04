@@ -145,8 +145,20 @@ export function effectiveParameters(template: TemplateDefinition, instance: Temp
   return parameters;
 }
 
+export function routeIdMatches(decoded: DecodedTemplate, candidate: string | undefined): boolean {
+  if (!candidate) return false;
+  return decoded.routes.some((route) => route.id === candidate || route.from === candidate);
+}
+
 export function validateCrossArtifact(template: TemplateDefinition, instance: TemplateInstance, decoded: DecodedTemplate, parameters: EffectiveParameter[]): Finding[] {
   const findings: Finding[] = [];
+  if (template.id && !routeIdMatches(decoded, template.id)) {
+    findings.push(finding('ROUTE_ID_MISMATCH', 'Warning', 'Cross-artifact', 'template', `Template id ${template.id} does not match any route id in the decoded XML.`, '$.id'));
+  }
+  const processRouteId = instance.inputParameters.find((parameter) => parameter.name === 'process.routeId')?.value;
+  if (processRouteId && !routeIdMatches(decoded, processRouteId)) {
+    findings.push(finding('PROCESS_ROUTE_ID_MISMATCH', 'Warning', 'Cross-artifact', 'registration', `process.routeId ${processRouteId} does not match any route id in the template XML.`, 'process.routeId'));
+  }
   parameters.forEach((parameter) => {
     if (parameter.state === 'Undeclared supplied') findings.push(finding('PARAM_UNDECLARED', 'Warning', 'Cross-artifact', 'registration', `Supplied parameter is not declared by the template: ${parameter.name}`));
     if (parameter.declaration && (parameter.declaration.isMandatory === true || parameter.declaration.isMandatory === 'true') && !parameter.provisionalValue) findings.push(finding('PARAM_MISSING', 'Invalid', 'Cross-artifact', 'registration', `Mandatory parameter is missing: ${parameter.name}`));
