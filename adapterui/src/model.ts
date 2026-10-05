@@ -18,9 +18,8 @@ export type TemplateReference = {
   templateName?: string;
   templateFile?: string;
   resolved: boolean;
-  routeId?: string;
-  routeIdMatchesTemplateId: boolean;
-  processRouteId?: string;
-  processRouteIdMatchesRouteId: boolean;
+  processReference: string;
+  matchedRouteId?: string;
+  referenceMatchesRouteId: boolean;
 };
 export type ReviewModel = { template: TemplateDefinition; registration: AdapterRegistration; instance: TemplateInstance; templateSource: SourceArtifact; registrationSource: SourceArtifact; decoded: DecodedTemplate; effectiveParameters: EffectiveParameter[]; findings: Finding[]; transformSpec?: unknown; transformEngine?: 'JOLT' | 'XSLT'; templateReferences?: TemplateReference[] };

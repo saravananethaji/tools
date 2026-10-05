@@ -5,7 +5,7 @@ import './styles.css';
 import './entry-point.css';
 import { XmlViewer } from './xml-viewer';
 import type { Finding, ReviewModel, SourceArtifact, TemplateDefinition, XmlNode } from './model';
-import { decodeTemplate, decodeTransformation, effectiveParameters, parseJson, parseRegistration, parseTemplate, routeIdMatches, validateCrossArtifact } from './parser';
+import { decodeTemplate, decodeTransformation, effectiveParameters, parseJson, parseRegistration, parseTemplate, processReferenceFor, routeIdMatches, validateCrossArtifact } from './parser';
 import type { TemplateReference } from './model';
 
 function isTemplate(value: unknown): boolean { const v = value as Record<string, unknown>; return !!v && typeof v.id === 'string' && typeof v.xmlRoute === 'string' && Array.isArray(v.inputParameters) && !Array.isArray(v.templates); }
@@ -68,18 +68,16 @@ function TemplateView({ review }: { review: ReviewModel }) {
 function TemplateRefPanel({ review }: { review: ReviewModel }) {
   const refs = review.templateReferences;
   if (!refs?.length) return null;
-  return <section className="panel wide"><h2>Template reference resolution</h2><p className="muted">Each template id referenced by the adapter registration, and how it resolves against the loaded template file and the decoded XML. Pre-load validation blocks mismatched files before this panel is rendered.</p>
-    <OverflowTable><table><thead><tr><th>Template id</th><th>Type</th><th>Resolved template file</th><th>Template name</th><th>Route id in XML</th><th>Template id ↔ route id</th><th>process.routeId</th><th>process.routeId ↔ route id</th></tr></thead>
+  return <section className="panel wide"><h2>Template reference resolution</h2><p className="muted">For each process / preprocess / postprocess entry, the process id the adapter mentions must have a corresponding route in that entry's template XML. The reference is the entry's template id, or the supplied <code>process.routeId</code> when it names a different route.</p>
+    <OverflowTable><table><thead><tr><th>Entry</th><th>Type</th><th>Process id (adapter)</th><th>Resolved template file</th><th>Route in XML</th><th>Result</th></tr></thead>
       <tbody>{refs.map((ref) => (
-        <tr key={ref.templateId} className={`template-ref ${ref.resolved ? 'ok' : 'broken'}`}>
+        <tr key={ref.templateId} className={`template-ref ${ref.referenceMatchesRouteId ? 'ok' : 'broken'}`}>
           <td><code>{ref.templateId}</code></td>
           <td>{ref.templateType}</td>
+          <td><code>{ref.processReference}</code>{ref.processReference !== ref.templateId ? <small className="muted"> (process.routeId)</small> : null}</td>
           <td>{ref.resolved ? <span className="ref-state ok">✓ resolved</span> : <span className="ref-state broken">✕ not resolved</span>}{ref.templateFile ? <code className="ref-file">{ref.templateFile}</code> : null}</td>
-          <td>{ref.templateName || '—'}</td>
-          <td>{ref.routeId ? <code>{ref.routeId}</code> : 'none'}</td>
-          <td>{ref.routeIdMatchesTemplateId ? <span className="ref-state ok">✓ match</span> : <span className="ref-state warn">⚠ mismatch</span>}</td>
-          <td>{ref.processRouteId ? <code>{ref.processRouteId}</code> : '—'}</td>
-          <td>{!ref.processRouteId ? '—' : ref.processRouteIdMatchesRouteId ? <span className="ref-state ok">✓ match</span> : <span className="ref-state broken">✕ no route</span>}</td>
+          <td>{ref.matchedRouteId ? <code>{ref.matchedRouteId}</code> : <span className="muted">no matching route</span>}</td>
+          <td>{ref.referenceMatchesRouteId ? <span className="ref-state ok">✓ route present</span> : <span className="ref-state broken">✕ no route</span>}</td>
         </tr>
       ))}</tbody></table></OverflowTable>
   </section>;
@@ -97,9 +95,9 @@ function buildReview(template: TemplateDefinition, registration: ReturnType<type
   if (matches.length !== 1) return { findings: [...baseFindings, { id: matches.length ? 'AMBIGUOUS_MATCH' : 'NO_EXACT_MATCH', severity: 'Invalid', category: 'Matching', artifact: 'registration', message: matches.length ? `Multiple matching template instances for ${template.id}.` : `No matching template instance for ${template.id}.` }] };
   const decoded = decodeTemplate(template); if (!decoded.decoded) return { findings: [...baseFindings, ...decoded.findings] };
   const parameters = effectiveParameters(template, matches[0], decoded.decoded); const transformation = decodeTransformation(matches[0]); const findings = [...baseFindings, ...decoded.findings, ...transformation.findings, ...validateCrossArtifact(template, matches[0], decoded.decoded, parameters)];
-  const processRouteId = matches[0].inputParameters.find((parameter) => parameter.name === 'process.routeId')?.value;
-  const matchingRoute = decoded.decoded.routes.find((route) => route.id === template.id || route.from === template.id) ?? decoded.decoded.routes.find((route) => route.id === processRouteId || route.from === processRouteId) ?? decoded.decoded.routes.find((route) => route.id);
-  const entryRouteId = matchingRoute?.id;
+  const processReference = processReferenceFor(matches[0]);
+  const referenceMatches = routeIdMatches(decoded.decoded, processReference);
+  const matchedRoute = decoded.decoded.routes.find((route) => route.id === processReference || route.from === processReference);
   const templateReferences: TemplateReference[] = [
     {
       templateId: template.id,
@@ -107,10 +105,9 @@ function buildReview(template: TemplateDefinition, registration: ReturnType<type
       templateName: template.name,
       templateFile: templateSource.name,
       resolved: true,
-      routeId: entryRouteId,
-      routeIdMatchesTemplateId: routeIdMatches(decoded.decoded, template.id),
-      processRouteId,
-      processRouteIdMatchesRouteId: processRouteId ? routeIdMatches(decoded.decoded, processRouteId) : false,
+      processReference,
+      matchedRouteId: matchedRoute?.id,
+      referenceMatchesRouteId: referenceMatches,
     },
   ];
   return { review: { template, registration, instance: matches[0], templateSource, registrationSource, decoded: decoded.decoded, effectiveParameters: parameters, findings, transformSpec: transformation.spec, transformEngine: transformation.engine, templateReferences }, findings };

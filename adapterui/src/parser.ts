@@ -150,14 +150,18 @@ export function routeIdMatches(decoded: DecodedTemplate, candidate: string | und
   return decoded.routes.some((route) => route.id === candidate || route.from === candidate);
 }
 
+// The process id the adapter mentions for this entry: the entry's own template id,
+// or the supplied process.routeId when it names a different route.
+export function processReferenceFor(instance: TemplateInstance): string {
+  const processRouteId = instance.inputParameters.find((parameter) => parameter.name === 'process.routeId')?.value;
+  return processRouteId || instance.id;
+}
+
 export function validateCrossArtifact(template: TemplateDefinition, instance: TemplateInstance, decoded: DecodedTemplate, parameters: EffectiveParameter[]): Finding[] {
   const findings: Finding[] = [];
-  if (template.id && !routeIdMatches(decoded, template.id)) {
-    findings.push(finding('ROUTE_ID_MISMATCH', 'Warning', 'Cross-artifact', 'template', `Template id ${template.id} does not match any route id in the decoded XML.`, '$.id'));
-  }
-  const processRouteId = instance.inputParameters.find((parameter) => parameter.name === 'process.routeId')?.value;
-  if (processRouteId && !routeIdMatches(decoded, processRouteId)) {
-    findings.push(finding('PROCESS_ROUTE_ID_MISMATCH', 'Warning', 'Cross-artifact', 'registration', `process.routeId ${processRouteId} does not match any route id in the template XML.`, 'process.routeId'));
+  const processReference = processReferenceFor(instance);
+  if (!routeIdMatches(decoded, processReference)) {
+    findings.push(finding('ROUTE_ID_MISMATCH', 'Warning', 'Cross-artifact', 'template', `The process id ${processReference} (entry ${instance.type} ${instance.id}) has no matching route in this template's XML.`, '$.id'));
   }
   parameters.forEach((parameter) => {
     if (parameter.state === 'Undeclared supplied') findings.push(finding('PARAM_UNDECLARED', 'Warning', 'Cross-artifact', 'registration', `Supplied parameter is not declared by the template: ${parameter.name}`));

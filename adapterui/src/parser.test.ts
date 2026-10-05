@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decodeTemplate, decodeTransformation, effectiveParameters, parseJson, parseRegistration, parseTemplate, routeIdMatches, strictBase64Decode, validateCrossArtifact } from './parser';
+import { decodeTemplate, decodeTransformation, effectiveParameters, parseJson, parseRegistration, parseTemplate, processReferenceFor, routeIdMatches, strictBase64Decode, validateCrossArtifact } from './parser';
 
 const xml = '<beans xmlns="http://www.springframework.org/schema/beans" xmlns:camel="http://camel.apache.org/schema/spring" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="x"><camelContext xmlns="http://camel.apache.org/schema/spring"><route id="r"><from uri="direct:start"/><choice><when><simple>${exchangeProperty.httpEndPoint} != ""</simple><to uri="http://example.test"/></when></choice></route></camelContext></beans>';
 const templateInput = { id: 'direct:test', name: 'Test', type: 'PROCESS', inputParameters: [{ name: 'httpEndPoint', helpText: 'Endpoint', isMandatory: 'true' }], defaultParameters: [{ name: 'timeout', value: '10' }], xmlRoute: btoa(xml) };
@@ -76,23 +76,37 @@ describe('static review parser', () => {
     expect(decoded.references.some((reference) => reference.kind === 'header' && reference.name === 'customerId')).toBe(true);
     expect(ids).toEqual(expect.arrayContaining(['PARAM_MISSING', 'PARAM_UNUSED', 'PARAM_UNDECLARED', 'XML_REF_UNDECLARED']));
   });
-  it('flags template id and process.routeId that do not resolve to any route id', () => {
-    const source = '<beans xmlns="http://www.springframework.org/schema/beans"><camelContext xmlns="http://camel.apache.org/schema/spring"><route id="r"><from uri="direct:start"/></route></camelContext></beans>';
-    const parsedTemplate = parseTemplate({ ...templateInput, id: 'direct:not-present', xmlRoute: btoa(source) }).template!;
+  it('flags a process id that has no matching route in the template XML', () => {
+    // Entry template id does not match any route in its own XML (Debulking postprocess shape).
+    const source = '<beans xmlns="http://www.springframework.org/schema/beans"><camelContext xmlns="http://camel.apache.org/schema/spring"><route id="direct.other"><from uri="direct:other"/></route></camelContext></beans>';
+    const parsedTemplate = parseTemplate({ ...templateInput, id: 'direct:api.postprocess', xmlRoute: btoa(source) }).template!;
     const decoded = decodeTemplate(parsedTemplate).decoded!;
-    const instance = { ...registration().templates[0], id: 'direct:not-present', inputParameters: [{ name: 'process.routeId', value: 'direct:also-missing', raw: {} }] };
-    expect(routeIdMatches(decoded, 'direct:not-present')).toBe(false);
+    const instance = { ...registration().templates[0], id: 'direct:api.postprocess', type: 'POSTPROCESS', inputParameters: [] };
+    expect(processReferenceFor(instance)).toBe('direct:api.postprocess');
+    expect(routeIdMatches(decoded, 'direct:api.postprocess')).toBe(false);
+    const ids = validateCrossArtifact(parsedTemplate, instance, decoded, effectiveParameters(parsedTemplate, instance, decoded)).map((item) => item.id);
+    expect(ids).toContain('ROUTE_ID_MISMATCH');
+  });
+  it('does not flag when the process id resolves to a route in the template XML', () => {
+    const source = '<beans xmlns="http://www.springframework.org/schema/beans"><camelContext xmlns="http://camel.apache.org/schema/spring"><route id="direct:start"><from uri="direct:start"/></route></camelContext></beans>';
+    const parsedTemplate = parseTemplate({ ...templateInput, id: 'direct:start', xmlRoute: btoa(source) }).template!;
+    const decoded = decodeTemplate(parsedTemplate).decoded!;
+    const instance = { ...registration().templates[0], id: 'direct:start' };
     expect(routeIdMatches(decoded, 'direct:start')).toBe(true);
     const ids = validateCrossArtifact(parsedTemplate, instance, decoded, effectiveParameters(parsedTemplate, instance, decoded)).map((item) => item.id);
-    expect(ids).toEqual(expect.arrayContaining(['ROUTE_ID_MISMATCH', 'PROCESS_ROUTE_ID_MISMATCH']));
+    expect(ids).not.toContain('ROUTE_ID_MISMATCH');
   });
-  it('does not flag matching template id and process.routeId', () => {
-    const decoded = decodeTemplate(template()).decoded!;
-    const instance = { ...registration().templates[0], inputParameters: [{ name: 'process.routeId', value: 'direct:start', raw: {} }] };
-    expect(routeIdMatches(decoded, 'direct:test')).toBe(false); // template id "direct:test" is not a route id in the fixture XML
-    expect(routeIdMatches(decoded, 'direct:start')).toBe(true);
-    const ids = validateCrossArtifact(template(), instance, decoded, effectiveParameters(template(), instance, decoded)).map((item) => item.id);
-    expect(ids).not.toContain('PROCESS_ROUTE_ID_MISMATCH');
+  it('prefers a supplied process.routeId that names a different route', () => {
+    const source = '<beans xmlns="http://www.springframework.org/schema/beans"><camelContext xmlns="http://camel.apache.org/schema/spring"><route id="direct:start"><from uri="direct:start"/></route></camelContext></beans>';
+    const parsedTemplate = parseTemplate({ ...templateInput, id: 'direct:entry', xmlRoute: btoa(source) }).template!;
+    const decoded = decodeTemplate(parsedTemplate).decoded!;
+    // process.routeId points at a route that does exist -> no finding, even though the entry id does not.
+    const okInstance = { ...registration().templates[0], inputParameters: [{ name: 'process.routeId', value: 'direct:start', raw: {} }] };
+    expect(processReferenceFor(okInstance)).toBe('direct:start');
+    expect(validateCrossArtifact(parsedTemplate, okInstance, decoded, effectiveParameters(parsedTemplate, okInstance, decoded)).map((item) => item.id)).not.toContain('ROUTE_ID_MISMATCH');
+    // process.routeId points at a missing route -> finding.
+    const badInstance = { ...registration().templates[0], inputParameters: [{ name: 'process.routeId', value: 'direct:missing', raw: {} }] };
+    expect(validateCrossArtifact(parsedTemplate, badInstance, decoded, effectiveParameters(parsedTemplate, badInstance, decoded)).map((item) => item.id)).toContain('ROUTE_ID_MISMATCH');
   });
   it('rejects external entities and malformed JOLT/XSLT transformations', () => {
     const instance = registration().templates[0];
