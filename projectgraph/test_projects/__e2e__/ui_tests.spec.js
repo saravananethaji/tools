@@ -228,7 +228,9 @@ test.describe('Maven Project Graph - UI Tests', () => {
     await expect(page.locator('input[name="requested_version"]')).toBeVisible();
     await expect(page.locator('select[name="mode"]')).toBeVisible();
     await expect(page.locator('select[name="control_module"] option')).not.toHaveCount(0);
-    await expect(page.locator('main')).toContainText('temporary POM-only mirror');
+    await expect(page.locator('main')).toContainText('POM that controls that version');
+    await expect(page.locator('main')).toContainText('Which control should I choose');
+    await expect(page.locator('input[name="allow_network"]')).toBeChecked();
 
     const response = await page.request.post(`${BASE_URL}/api/preview`, {
       form: {

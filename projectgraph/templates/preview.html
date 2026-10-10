@@ -2,30 +2,37 @@
 {% block title %}Resolution Preview · Maven Graph{% endblock %}
 {% block content %}
 <div class="card"><h2 style="margin:.2rem 0 .4rem;">Resolution Preview</h2>
-<p class="small">Runs Maven against a temporary POM-only mirror. Your selected workspace is never edited. It supports one existing literal version or version property, and proves Maven resolution only—not build or runtime compatibility.</p>
-<form id="preview-form" class="toolbar">
-  <input name="target_ga" required placeholder="groupId:artifactId" aria-label="Target library">
-  <input name="requested_version" required placeholder="Requested version" aria-label="Requested version">
-  <select name="mode" class="btn"><option value="direct">Direct dependency</option><option value="dependency-management">Dependency management</option><option value="bom">Imported BOM</option><option value="property">Version property</option></select>
-  <input name="property_name" placeholder="Property name (property mode)">
-  <select name="control_module" required class="btn">{% for module in modules %}<option value="{{ module }}">{{ module }}</option>{% endfor %}</select>
-  <label class="small"><input type="checkbox" name="allow_network"> Allow Maven downloads</label>
-  <button class="btn" type="submit">Preview resolution</button>
-</form></div>
+<p class="small">Test one proposed Maven version change without editing your project. ProjectGraph copies only POM files into a temporary workspace, asks Maven to resolve there, then shows the dependency branches that changed.</p>
+<p class="small" style="border-left:3px solid var(--accent);padding:.45rem .7rem;line-height:1.5"><strong>Use this after Impact or Vulnerabilities:</strong> identify the resolved library, find the POM/BOM/property controlling it, enter the desired version, then preview. A successful preview proves Maven resolution—not build or runtime compatibility.</p></div>
+<form id="preview-form" class="card" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1rem;align-items:end">
+  <div><label for="target_ga"><strong>1. Library to change</strong></label><input id="target_ga" name="target_ga" required placeholder="org.example:library" aria-label="Target library" style="width:100%;margin-top:.35rem"><p class="small">Copy <code>groupId:artifactId</code> from OSS Inventory, Impact, or Vulnerabilities.</p></div>
+  <div><label for="requested_version"><strong>2. Requested version</strong></label><input id="requested_version" name="requested_version" required placeholder="for example: 2.17.1" aria-label="Requested version" style="width:100%;margin-top:.35rem"><p class="small">The version Maven should resolve after the temporary change.</p></div>
+  <div><label for="mode"><strong>3. Where is the version controlled?</strong></label><select id="mode" name="mode" class="btn" style="width:100%;margin-top:.35rem"><option value="direct">Direct dependency in this POM</option><option value="dependency-management">dependencyManagement in this POM</option><option value="bom">Imported BOM version in this POM</option><option value="property">Version property in this POM</option></select><p class="small" id="mode-help"></p></div>
+  <div id="property-wrap" hidden><label for="property_name"><strong>Property name</strong></label><input id="property_name" name="property_name" placeholder="for example: spring.version" style="width:100%;margin-top:.35rem"><p class="small">Use the exact name inside <code>${…}</code>.</p></div>
+  <div><label for="control_module"><strong>4. POM that controls that version</strong></label><select id="control_module" name="control_module" required class="btn" style="width:100%;margin-top:.35rem">{% for module in modules %}<option value="{{ module }}">{{ module }}</option>{% endfor %}</select><p class="small">Choose the module, parent, or BOM POM where that existing version is declared.</p></div>
+  <div><label class="small" style="display:block"><input type="checkbox" name="allow_network" checked> <strong>Allow Maven downloads (recommended)</strong></label><p class="small">The preview has its own empty Maven repository. Leave this on unless every required artifact is already available inside the temporary preview.</p></div>
+  <div><button class="btn" type="submit" style="width:100%">Preview changed dependency paths</button></div>
+</form>
+<div class="card small"><strong>Which control should I choose?</strong><br><b>Direct dependency:</b> the dependency has a version in the selected module POM. · <b>dependencyManagement:</b> the selected POM centrally sets its version. · <b>Imported BOM:</b> change the version of a <code>type=pom</code>, <code>scope=import</code> dependency. · <b>Version property:</b> the dependency uses a value such as <code>${spring.version}</code>.</div>
 <div id="preview-result"></div>
 <script>
 const escapeHtml = text => String(text).replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+const help = {direct:'Choose this when the selected POM declares the library directly under <dependencies>.', 'dependency-management':'Choose this when the selected POM sets the library version under <dependencyManagement>.', bom:'Choose this when the selected POM imports a BOM whose version you want to change.', property:'Choose this when the selected POM uses a version property for this library.'};
+const mode = document.getElementById('mode'), propertyWrap = document.getElementById('property-wrap');
+function setModeHelp(){ document.getElementById('mode-help').textContent=help[mode.value]; propertyWrap.hidden=mode.value!=='property'; }
+mode.addEventListener('change',setModeHelp);setModeHelp();
 document.getElementById('preview-form').addEventListener('submit', async event => {
- event.preventDefault(); const result = document.getElementById('preview-result'); result.textContent = 'Resolving temporary preview…';
+ event.preventDefault(); const result = document.getElementById('preview-result'); result.innerHTML='<div class="card small">Resolving the temporary preview. Your project files are not being edited…</div>';
  const response = await fetch('/api/preview', {method:'POST', body:new FormData(event.target)}); const data = await response.json();
- if (!response.ok) { result.innerHTML = `<div class="card err">${escapeHtml(data.detail || data.error || 'Preview failed')}</div>`; return; }
+ if (!response.ok) { result.innerHTML = `<div class="card err"><strong>Preview could not run</strong><br>${escapeHtml(data.detail || data.error || 'Preview failed')}</div>`; return; }
  let html = `<div class="card"><h3>Changed subtrees — ${escapeHtml(data.verdict)}</h3><p class="small">Target ${escapeHtml(data.target)}:${escapeHtml(data.requested_version)}; network ${escapeHtml(data.network_mode)}.</p>`;
  for (const module of data.modules) { html += `<div class="card"><strong>${escapeHtml(module.module)}</strong> <span class="scope-pill">${escapeHtml(module.status)}</span>`;
    if (module.error) html += `<pre class="err-box">${escapeHtml(module.error)}</pre>`;
    if (module.resolved_versions) html += `<p class="small">Resolved target version(s): ${escapeHtml(module.resolved_versions.join(', ') || 'not present')}</p>`;
-   if (module.changed_subtrees) { html += `<p class="small">Removed paths</p><pre class="export">${escapeHtml(module.changed_subtrees.removed.map(p=>p.join(' → ')).join('\n') || 'None')}</pre><p class="small">Preview paths</p><pre class="export">${escapeHtml(module.changed_subtrees.added.map(p=>p.join(' → ')).join('\n') || 'None')}</pre>`; }
+   if (module.changed_subtrees) { html += `<p class="small">Before: removed paths</p><pre class="export">${escapeHtml(module.changed_subtrees.removed.map(p=>p.join(' → ')).join('\n') || 'No removed paths')}</pre><p class="small">After: preview paths</p><pre class="export">${escapeHtml(module.changed_subtrees.added.map(p=>p.join(' → ')).join('\n') || 'No added paths')}</pre>`; }
    html += '</div>'; }
  result.innerHTML = html + '</div>';
 });
+document.querySelector('main').dataset.rendered='true';
 </script>
 {% endblock %}
