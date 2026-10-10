@@ -131,9 +131,13 @@ def index_artifacts(model: GraphModel) -> Dict[str, dict]:
     for module in model.modules:
         if not has_maven_resolved_tree(module):
             continue
+        visited: set = set()
         stack = list(module.tree.children)
         while stack:
             node = stack.pop()
+            if node.artifact_id in visited:
+                continue
+            visited.add(node.artifact_id)
             if node.artifact_id not in index:
                 index[node.artifact_id] = {
                     **_artifact_meta(node),

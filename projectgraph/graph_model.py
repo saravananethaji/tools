@@ -207,7 +207,7 @@ def resolved_tree_exclusion_reason(module: Module) -> Optional[str]:
     metadata: older valid resolved-cache records do not always store it.
     """
     if module.tree is None:
-        return module.error or module.analysis_status
+        return module.error or module.analysis_status or "no resolved tree"
     if module.source != "maven-resolved":
         return f"source={module.source} is not Maven-resolved"
     return None
