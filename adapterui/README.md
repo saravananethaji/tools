@@ -4,6 +4,8 @@ A browser-based, read-only reviewer for existing AdapterMS configuration artifac
 
 It does not start Camel routes, contact endpoints, run transformations, or write configuration changes.
 
+The requirements and design of the implemented tool are documented in [`DESIGN.md`](DESIGN.md).
+
 ## Run locally
 
 Requirements: Node.js and pnpm.
