@@ -1,5 +1,6 @@
 import React, { useState, useRef, useMemo, useEffect } from 'react';
 import './FeatureFileExplorer.css';
+import type { Finding, ReviewModel } from '../model';
 import {
   parseFeatureText,
   generateMarkdownExplanation,
@@ -8,12 +9,28 @@ import {
   type FeatureStep,
   type ApiCall,
   type DbValidation,
+  type ConfigPair,
+  type DetectedAdapterConfig,
+  type DetectedTemplateConfig,
 } from './featureParser';
 import { SAMPLE_FEATURE_CONTENT, SAMPLE_FEATURE_NAME } from './sampleFeature';
+import {
+  inspectPayloadJson,
+  buildReviewsFromPayloads,
+  matchesPath,
+  isSamplePayloadPath,
+  getBundledSampleResolutions,
+  type ResolvedPayloadFile,
+} from './featureAdapterBridge';
+import { strictBase64Decode } from '../parser';
 
-type TabView = 'scenarios' | 'apis' | 'validations' | 'artifacts' | 'explanation' | 'raw';
+type TabView = 'scenarios' | 'adapters' | 'apis' | 'validations' | 'artifacts' | 'explanation' | 'raw';
 
-export const FeatureFileExplorer: React.FC = () => {
+export interface FeatureFileExplorerProps {
+  onOpenReviews?: (reviews: ReviewModel[], findings: Finding[]) => void;
+}
+
+export const FeatureFileExplorer: React.FC<FeatureFileExplorerProps> = ({ onOpenReviews }) => {
   const [fileName, setFileName] = useState<string>('');
   const [fileSize, setFileSize] = useState<number>(0);
   const [rawText, setRawText] = useState<string>('');
@@ -27,13 +44,55 @@ export const FeatureFileExplorer: React.FC = () => {
   const [isDragOver, setIsDragOver] = useState<boolean>(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
+  // Resolved payload files state (keyed by feature target path)
+  const [resolvedFiles, setResolvedFiles] = useState<Record<string, ResolvedPayloadFile>>({});
+  const [folderResolving, setFolderResolving] = useState<boolean>(false);
+
+  // Inspecting payload modal
+  const [inspectingPayload, setInspectingPayload] = useState<{
+    name: string;
+    path: string;
+    file?: ResolvedPayloadFile;
+  } | null>(null);
+
+  // Pasting JSON modal
+  const [pastingForPath, setPastingForPath] = useState<string | null>(null);
+  const [pastedText, setPastedText] = useState<string>('');
+
+  const [targetUploadPath, setTargetUploadPath] = useState<string | null>(null);
+  const [focusedFlowId, setFocusedFlowId] = useState<string | null>(null);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
+  const singleFileInputRef = useRef<HTMLInputElement>(null);
+
+  const jumpToFlow = (flowId: string) => {
+    setActiveTab('adapters');
+    setFocusedFlowId(flowId);
+    setTimeout(() => {
+      const el = document.getElementById(`flow-${flowId}`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }, 50);
+  };
+
+  const jumpToScenario = (scenarioIndex: number) => {
+    setActiveTab('scenarios');
+    setExpandedScenarios(prev => ({ ...prev, [scenarioIndex]: true }));
+    setTimeout(() => {
+      const el = document.getElementById(`scenario-${scenarioIndex}`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }, 50);
+  };
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => {
       setToastMessage(prev => (prev === msg ? null : prev));
-    }, 2400);
+    }, 2500);
   };
 
   const copyToClipboard = async (text: string, label: string) => {
@@ -41,7 +100,6 @@ export const FeatureFileExplorer: React.FC = () => {
       await navigator.clipboard.writeText(text);
       showToast(`Copied ${label} to clipboard!`);
     } catch {
-      // Fallback
       const textArea = document.createElement('textarea');
       textArea.value = text;
       document.body.appendChild(textArea);
@@ -50,6 +108,38 @@ export const FeatureFileExplorer: React.FC = () => {
       document.body.removeChild(textArea);
       showToast(`Copied ${label} to clipboard!`);
     }
+  };
+
+  // Auto-resolve known sample payloads
+  const autoResolveKnownFiles = (parsed: FeatureAnalysis) => {
+    const resolutions: Record<string, ResolvedPayloadFile> = {};
+    const bundledSamples = getBundledSampleResolutions();
+
+    parsed.artifacts.payloadFiles.forEach(path => {
+      const sampleType = isSamplePayloadPath(path);
+      if (sampleType === 'adapter') {
+        const sampleAdapter = bundledSamples.find(s => s.fileKind === 'registration');
+        if (sampleAdapter) {
+          resolutions[path] = {
+            ...sampleAdapter,
+            path,
+          };
+        }
+      } else if (sampleType === 'template') {
+        const sampleTemplate = bundledSamples.find(s => s.fileKind === 'template');
+        if (sampleTemplate) {
+          resolutions[path] = {
+            ...sampleTemplate,
+            path,
+          };
+        }
+      }
+    });
+
+    setResolvedFiles(prev => ({
+      ...prev,
+      ...resolutions,
+    }));
   };
 
   // Load and parse content
@@ -69,6 +159,9 @@ export const FeatureFileExplorer: React.FC = () => {
       });
       setExpandedScenarios(initialExpanded);
       setAllExpanded(true);
+
+      // Auto-resolve matching sample payloads
+      autoResolveKnownFiles(parsed);
     } catch (err) {
       setError(`Failed to parse feature file: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -144,6 +237,149 @@ export const FeatureFileExplorer: React.FC = () => {
     setAllExpanded(nextState);
   };
 
+  // Resolve files from local folder picker
+  const handleFolderSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0 || !analysis) return;
+
+    setFolderResolving(true);
+    let matchedCount = 0;
+    const newResolutions: Record<string, ResolvedPayloadFile> = {};
+
+    try {
+      const fileList = Array.from(files);
+      const targetPaths = analysis.artifacts.payloadFiles;
+
+      for (const targetPath of targetPaths) {
+        const matchedFile = fileList.find(f => {
+          const relPath = f.webkitRelativePath || f.name;
+          return matchesPath(targetPath, relPath, f.name);
+        });
+
+        if (matchedFile) {
+          const text = await matchedFile.text();
+          const inspection = inspectPayloadJson(text, matchedFile.name);
+          newResolutions[targetPath] = {
+            name: matchedFile.name,
+            path: targetPath,
+            rawText: text,
+            source: 'folder',
+            fileKind: inspection.kind,
+            parsedJson: inspection.parsed,
+            parseError: inspection.error,
+          };
+          matchedCount++;
+        }
+      }
+
+      setResolvedFiles(prev => ({ ...prev, ...newResolutions }));
+      if (matchedCount > 0) {
+        showToast(`Matched ${matchedCount} payload file${matchedCount === 1 ? '' : 's'} from folder!`);
+      } else {
+        showToast('No matching payload files found in selected folder.');
+      }
+    } catch (err) {
+      setError(`Error reading folder files: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setFolderResolving(false);
+      if (folderInputRef.current) folderInputRef.current.value = '';
+    }
+  };
+
+  // Single file upload trigger
+  const triggerSingleUpload = (path: string) => {
+    setTargetUploadPath(path);
+    singleFileInputRef.current?.click();
+  };
+
+  const handleSingleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    const path = targetUploadPath;
+    if (!file || !path) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const text = event.target?.result as string;
+      const inspection = inspectPayloadJson(text, file.name);
+      setResolvedFiles(prev => ({
+        ...prev,
+        [path]: {
+          name: file.name,
+          path,
+          rawText: text,
+          source: 'upload',
+          fileKind: inspection.kind,
+          parsedJson: inspection.parsed,
+          parseError: inspection.error,
+        },
+      }));
+      showToast(`Loaded ${file.name} for ${path.split('/').pop()}!`);
+    };
+    reader.readAsText(file);
+    if (singleFileInputRef.current) singleFileInputRef.current.value = '';
+  };
+
+  // Pasted JSON save
+  const handleSavePastedJson = () => {
+    if (!pastingForPath || !pastedText.trim()) return;
+    const fileName = pastingForPath.split('/').pop() || 'pasted.json';
+    const inspection = inspectPayloadJson(pastedText, fileName);
+    if (inspection.error) {
+      showToast(`Invalid JSON: ${inspection.error}`);
+      return;
+    }
+
+    setResolvedFiles(prev => ({
+      ...prev,
+      [pastingForPath]: {
+        name: fileName,
+        path: pastingForPath,
+        rawText: pastedText,
+        source: 'pasted',
+        fileKind: inspection.kind,
+        parsedJson: inspection.parsed,
+      },
+    }));
+    showToast(`Saved JSON for ${fileName}!`);
+    setPastingForPath(null);
+    setPastedText('');
+  };
+
+  // Launch review into adapter reviewer
+  const handleOpenInReviewer = (pair: ConfigPair) => {
+    if (!onOpenReviews) {
+      showToast('Adapter reviewer is not wired in current context');
+      return;
+    }
+
+    const adapterPath = pair.adapterConfig?.path;
+    const adapterFile = adapterPath ? resolvedFiles[adapterPath] : undefined;
+
+    const templateFiles: ResolvedPayloadFile[] = [];
+    pair.templateConfigs.forEach(t => {
+      const tplFile = resolvedFiles[t.path];
+      if (tplFile) templateFiles.push(tplFile);
+    });
+
+    if (!adapterFile) {
+      showToast(`Adapter configuration file missing for ${pair.adapterConfig?.fileName || 'adapter'}`);
+      return;
+    }
+    if (templateFiles.length === 0) {
+      showToast(`Template configuration file missing for ${pair.templateConfigs[0]?.fileName || 'template'}`);
+      return;
+    }
+
+    const result = buildReviewsFromPayloads(adapterFile, templateFiles);
+    if (result.error || result.reviews.length === 0) {
+      setError(`Could not launch review: ${result.error || 'No matching reviews'}`);
+      showToast(`Review error: ${result.error || 'Check findings'}`);
+      return;
+    }
+
+    onOpenReviews(result.reviews, result.findings);
+  };
+
   // Filtered scenarios
   const filteredScenarios = useMemo(() => {
     if (!analysis) return [];
@@ -152,7 +388,7 @@ export const FeatureFileExplorer: React.FC = () => {
         if (filterType === 'apis' && s.apiCalls.length === 0) return false;
         if (filterType === 'validations' && s.dbValidations.length === 0) return false;
         if (filterType === 'errors' && (!s.expectedStatus || s.expectedStatus < 400)) return false;
-        if (filterType === 'success' && (s.expectedStatus && s.expectedStatus >= 400)) return false;
+        if (filterType === 'success' && s.expectedStatus && s.expectedStatus >= 400) return false;
       }
 
       if (!searchQuery.trim()) return true;
@@ -160,7 +396,9 @@ export const FeatureFileExplorer: React.FC = () => {
       const matchName = s.name.toLowerCase().includes(query);
       const matchTags = s.tags.some(t => t.toLowerCase().includes(query));
       const matchSteps = s.steps.some(st => st.text.toLowerCase().includes(query));
-      const matchApi = s.apiCalls.some(a => a.uri.toLowerCase().includes(query) || a.method.toLowerCase().includes(query));
+      const matchApi = s.apiCalls.some(
+        a => a.uri.toLowerCase().includes(query) || a.method.toLowerCase().includes(query)
+      );
       const matchDb = s.dbValidations.some(v => v.tableName.toLowerCase().includes(query));
       return matchName || matchTags || matchSteps || matchApi || matchDb;
     });
@@ -171,14 +409,48 @@ export const FeatureFileExplorer: React.FC = () => {
     return generateMarkdownExplanation(analysis);
   }, [analysis]);
 
+  // Decoded XML route for inspectingPayload
+  const decodedXml = useMemo(() => {
+    if (!inspectingPayload?.file?.rawText) return null;
+    try {
+      const parsed = JSON.parse(inspectingPayload.file.rawText);
+      if (parsed && typeof parsed.xmlRoute === 'string') {
+        const decoded = strictBase64Decode(parsed.xmlRoute, 'template', '$.xmlRoute');
+        return decoded.text || null;
+      }
+    } catch {
+      return null;
+    }
+    return null;
+  }, [inspectingPayload]);
+
   return (
     <div className="ffe-container">
+      {/* Hidden Folder & Single File Inputs */}
+      <input
+        type="file"
+        multiple
+        ref={folderInputRef}
+        style={{ display: 'none' }}
+        {...({ webkitdirectory: '' } as Record<string, string>)}
+        onChange={handleFolderSelect}
+      />
+      <input
+        type="file"
+        accept=".json,.xml,.txt"
+        ref={singleFileInputRef}
+        style={{ display: 'none' }}
+        onChange={handleSingleFileUpload}
+      />
+
       {/* Header & File Dropzone */}
       <div className="ffe-header-card">
         <div className="ffe-header-top">
           <div className="ffe-title-block">
             <h2>Feature File Explorer</h2>
-            <p>Inspect Gherkin/Cucumber .feature tests — execution flow, API payloads, tokens, and database assertions.</p>
+            <p>
+              Inspect Gherkin/Cucumber .feature tests — execution flow, adapter configs, API payloads, and assertions.
+            </p>
           </div>
 
           <div className="ffe-header-actions">
@@ -218,7 +490,7 @@ export const FeatureFileExplorer: React.FC = () => {
             {fileName ? `Active file: ${fileName}` : 'Drop your .feature file here, or click to browse'}
           </div>
           <div className="ffe-dropzone-subtext">
-            Supports Gherkin specifications (.feature, .txt) with background steps, tables, and assertions
+            Supports Gherkin specifications (.feature, .txt) with adapter/template payloads, tables, and assertions
           </div>
         </div>
 
@@ -228,16 +500,19 @@ export const FeatureFileExplorer: React.FC = () => {
             <div className="ffe-file-meta">
               <span>{(fileSize / 1024).toFixed(1)} KB</span>
               <span>{analysis.stats.totalScenarios} Scenarios</span>
-              <span>{analysis.stats.totalSteps} Steps</span>
               <span>{analysis.stats.totalApiCalls} API Calls</span>
+              <span>{analysis.configurations.pairs.length} Adapter Flows</span>
             </div>
           </div>
         )}
       </div>
 
       {error && (
-        <div className="notice" style={{ borderColor: '#ef4444', background: '#3b1c1c', color: '#fca5a5' }}>
-          <strong>Error:</strong> <span>{error}</span>
+        <div
+          className="notice"
+          style={{ borderColor: '#ef4444', background: '#3b1c1c', color: '#fca5a5' }}
+        >
+          <strong>Notice:</strong> <span>{error}</span>
         </div>
       )}
 
@@ -248,25 +523,31 @@ export const FeatureFileExplorer: React.FC = () => {
             <div className="ffe-stat-card blue">
               <span className="ffe-stat-label">Total Scenarios</span>
               <span className="ffe-stat-value">{analysis.stats.totalScenarios}</span>
-              <span className="ffe-stat-desc">{analysis.background.steps.length > 0 ? '+ Background Setup' : 'No Background'}</span>
+              <span className="ffe-stat-desc">
+                {analysis.background.steps.length > 0 ? '+ Background Setup' : 'No Background'}
+              </span>
             </div>
 
             <div className="ffe-stat-card teal">
+              <span className="ffe-stat-label">Adapter Flows</span>
+              <span className="ffe-stat-value">
+                {analysis.configurations.pairs.length || analysis.configurations.adapterConfigs.length}
+              </span>
+              <span className="ffe-stat-desc">Configurations detected</span>
+            </div>
+
+            <div className="ffe-stat-card purple">
               <span className="ffe-stat-label">API Endpoints</span>
               <span className="ffe-stat-value">{analysis.stats.totalApiCalls}</span>
               <span className="ffe-stat-desc">HTTP Calls detected</span>
             </div>
 
-            <div className="ffe-stat-card purple">
-              <span className="ffe-stat-label">DB Validations</span>
-              <span className="ffe-stat-value">{analysis.stats.totalValidations}</span>
-              <span className="ffe-stat-desc">{analysis.artifacts.dbTables.join(', ') || 'None'}</span>
-            </div>
-
             <div className="ffe-stat-card amber">
-              <span className="ffe-stat-label">Artifacts & Files</span>
+              <span className="ffe-stat-label">Payload Files</span>
               <span className="ffe-stat-value">{analysis.artifacts.payloadFiles.length}</span>
-              <span className="ffe-stat-desc">{analysis.artifacts.uuids.length} Correlation UUIDs</span>
+              <span className="ffe-stat-desc">
+                {Object.keys(resolvedFiles).length} of {analysis.artifacts.payloadFiles.length} Resolved
+              </span>
             </div>
 
             <div className="ffe-stat-card rose">
@@ -296,7 +577,9 @@ export const FeatureFileExplorer: React.FC = () => {
               {analysis.feature.tags.length > 0 && (
                 <div className="ffe-tag-list">
                   {analysis.feature.tags.map((tag, i) => (
-                    <span key={i} className="ffe-tag">{tag}</span>
+                    <span key={i} className="ffe-tag">
+                      {tag}
+                    </span>
                   ))}
                 </div>
               )}
@@ -334,6 +617,18 @@ export const FeatureFileExplorer: React.FC = () => {
 
               <button
                 role="tab"
+                aria-selected={activeTab === 'adapters'}
+                className={`ffe-tab-btn ${activeTab === 'adapters' ? 'active' : ''}`}
+                onClick={() => setActiveTab('adapters')}
+              >
+                🔌 Adapter & Templates{' '}
+                <span className="ffe-tab-count">
+                  {analysis.configurations.pairs.length || analysis.configurations.adapterConfigs.length}
+                </span>
+              </button>
+
+              <button
+                role="tab"
                 aria-selected={activeTab === 'apis'}
                 className={`ffe-tab-btn ${activeTab === 'apis' ? 'active' : ''}`}
                 onClick={() => setActiveTab('apis')}
@@ -356,7 +651,10 @@ export const FeatureFileExplorer: React.FC = () => {
                 className={`ffe-tab-btn ${activeTab === 'artifacts' ? 'active' : ''}`}
                 onClick={() => setActiveTab('artifacts')}
               >
-                📦 Artifacts & Tokens <span className="ffe-tab-count">{analysis.artifacts.payloadFiles.length + analysis.artifacts.uuids.length}</span>
+                📦 Artifacts & Tokens{' '}
+                <span className="ffe-tab-count">
+                  {analysis.artifacts.payloadFiles.length + analysis.artifacts.uuids.length}
+                </span>
               </button>
 
               <button
@@ -388,7 +686,11 @@ export const FeatureFileExplorer: React.FC = () => {
                   onChange={(e) => setSearchQuery(e.target.value)}
                 />
                 {searchQuery && (
-                  <button className="ffe-btn-icon" onClick={() => setSearchQuery('')} title="Clear search">
+                  <button
+                    className="ffe-btn-icon"
+                    onClick={() => setSearchQuery('')}
+                    title="Clear search"
+                  >
                     ✕
                   </button>
                 )}
@@ -401,7 +703,9 @@ export const FeatureFileExplorer: React.FC = () => {
             <div className="ffe-scenarios-container">
               <div className="ffe-section-bar">
                 <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                  <h3>Scenarios ({filteredScenarios.length} of {analysis.scenarios.length})</h3>
+                  <h3>
+                    Scenarios ({filteredScenarios.length} of {analysis.scenarios.length})
+                  </h3>
                   <div style={{ display: 'flex', gap: '6px' }}>
                     <button
                       className={`ffe-btn ffe-btn-sm ${filterType === 'all' ? 'ffe-btn-primary' : ''}`}
@@ -430,10 +734,7 @@ export const FeatureFileExplorer: React.FC = () => {
                   </div>
                 </div>
 
-                <button
-                  className="ffe-btn ffe-btn-sm"
-                  onClick={toggleAllScenarios}
-                >
+                <button className="ffe-btn ffe-btn-sm" onClick={toggleAllScenarios}>
                   {allExpanded ? '▲ Collapse All' : '▼ Expand All'}
                 </button>
               </div>
@@ -443,20 +744,17 @@ export const FeatureFileExplorer: React.FC = () => {
                 <div className="ffe-card background-card">
                   <div className="ffe-card-header">
                     <div className="ffe-card-title-group">
-                      <span className="ffe-type-badge" style={{ background: '#0f3c36', color: '#5eead4', borderColor: '#0d9488' }}>
+                      <span
+                        className="ffe-type-badge"
+                        style={{ background: '#0f3c36', color: '#5eead4', borderColor: '#0d9488' }}
+                      >
                         PRE-CONDITIONS / SETUP
                       </span>
-                      <h4 className="ffe-scenario-name">Background ({analysis.background.steps.length} steps)</h4>
-                    </div>
-                    <div className="ffe-badge-group">
-                      {analysis.background.expectedStatus && (
-                        <span className="ffe-status-badge s2xx">
-                          Expected: {analysis.background.expectedStatus}
-                        </span>
-                      )}
+                      <h4 className="ffe-scenario-name">
+                        Background ({analysis.background.steps.length} steps)
+                      </h4>
                     </div>
                   </div>
-
                   <div className="ffe-card-body">
                     <ul className="ffe-steps-list">
                       {analysis.background.steps.map((step, idx) => (
@@ -467,38 +765,78 @@ export const FeatureFileExplorer: React.FC = () => {
                 </div>
               )}
 
-              {/* Scenario Cards */}
-              {filteredScenarios.map((scenario) => {
-                const isExpanded = !!expandedScenarios[scenario.index];
+              {/* Scenarios List */}
+              {filteredScenarios.map(scenario => {
+                const isExpanded = expandedScenarios[scenario.index] !== false;
+                const isConfigScenario =
+                  scenario.type === 'Template Configuration' ||
+                  scenario.type === 'Adapter Configuration';
+
+                const matchedFlow = analysis.configurations.pairs.find(
+                  p =>
+                    p.adapterConfig?.scenarioIndex === scenario.index ||
+                    p.templateConfigs.some(t => t.scenarioIndex === scenario.index) ||
+                    p.invocations.some(inv => inv.scenarioIndex === scenario.index)
+                );
+                const matchedFlowIdx = matchedFlow
+                  ? analysis.configurations.pairs.findIndex(p => p.id === matchedFlow.id)
+                  : -1;
+
                 return (
-                  <div key={scenario.index} className="ffe-card">
+                  <div key={scenario.index} id={`scenario-${scenario.index}`} className="ffe-card">
                     <div
-                      className="ffe-card-header"
+                      className="ffe-card-header clickable"
                       onClick={() => toggleScenario(scenario.index)}
                     >
                       <div className="ffe-card-title-group">
-                        <span className="ffe-scenario-num">#{scenario.index}</span>
-                        <h4 className="ffe-scenario-name">{scenario.name}</h4>
-                        <span className={`ffe-type-badge ${
-                          scenario.type.includes('Negative') || scenario.type.includes('Error') ? 'negative' :
-                          scenario.type.includes('Validation') ? 'validation' :
-                          scenario.type.includes('Adapter') ? 'adapter' : ''
-                        }`}>
+                        <span className="ffe-scenario-index">#{scenario.index}</span>
+                        <span className={`ffe-type-badge ${scenario.type.replace(/\s+/g, '-').toLowerCase()}`}>
                           {scenario.type}
                         </span>
-                      </div>
 
-                      <div className="ffe-badge-group">
                         {scenario.expectedStatus && (
-                          <span className={`ffe-status-badge ${
-                            scenario.expectedStatus < 400 ? 's2xx' : scenario.expectedStatus < 500 ? 's4xx' : 's5xx'
-                          }`}>
-                            {scenario.expectedStatus} {scenario.expectedStatus === 201 ? 'Created' : scenario.expectedStatus === 400 ? 'Bad Request' : scenario.expectedStatus === 500 ? 'Server Error' : ''}
+                          <span
+                            className={`ffe-status-badge ${
+                              scenario.expectedStatus < 400
+                                ? 's2xx'
+                                : scenario.expectedStatus < 500
+                                ? 's4xx'
+                                : 's5xx'
+                            }`}
+                          >
+                            HTTP {scenario.expectedStatus}
                           </span>
                         )}
-                        <span style={{ color: '#94a3b8', fontSize: '0.8rem' }}>
-                          {isExpanded ? '▲' : '▼'}
-                        </span>
+
+                        <h4 className="ffe-scenario-name">{scenario.name}</h4>
+                      </div>
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        {matchedFlow ? (
+                          <button
+                            className="ffe-btn ffe-btn-sm ffe-btn-accent"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              jumpToFlow(matchedFlow.id);
+                            }}
+                            title={`Jump to Flow #${matchedFlowIdx + 1} in Adapter & Templates tab`}
+                          >
+                            🔌 View Flow #{matchedFlowIdx + 1}
+                          </button>
+                        ) : isConfigScenario ? (
+                          <button
+                            className="ffe-btn ffe-btn-sm ffe-btn-accent"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setActiveTab('adapters');
+                            }}
+                            title="Inspect in Adapter & Templates Tab"
+                          >
+                            🔌 View Config
+                          </button>
+                        ) : null}
+                        <span className="ffe-scenario-line">Line {scenario.lineNumber}</span>
+                        <span className="ffe-collapse-icon">{isExpanded ? '▲' : '▼'}</span>
                       </div>
                     </div>
 
@@ -507,7 +845,9 @@ export const FeatureFileExplorer: React.FC = () => {
                         {scenario.tags.length > 0 && (
                           <div className="ffe-tag-list" style={{ marginBottom: '8px' }}>
                             {scenario.tags.map((t, idx) => (
-                              <span key={idx} className="ffe-tag">{t}</span>
+                              <span key={idx} className="ffe-tag">
+                                {t}
+                              </span>
                             ))}
                           </div>
                         )}
@@ -532,17 +872,409 @@ export const FeatureFileExplorer: React.FC = () => {
             </div>
           )}
 
-          {/* TAB 2: API MATRIX */}
+          {/* TAB 2: ADAPTER & TEMPLATES CONFIGURATIONS */}
+          {activeTab === 'adapters' && (
+            <div className="ffe-config-container">
+              {/* Flow Sequence Banner */}
+              <div className="ffe-config-banner">
+                <h4 className="ffe-config-banner-title">
+                  <span>🔄</span> Feature Execution Architecture & Mediator Configuration Flow
+                </h4>
+                <div className="ffe-flow-steps">
+                  <div className="ffe-flow-step">
+                    <span className="ffe-flow-step-num">Step 1</span>
+                    <span className="ffe-flow-step-title">Template Definition</span>
+                    <span className="ffe-flow-step-desc">
+                      Registers Camel XML routes and parameters at <code>/system/adapters/templates/*</code>.
+                    </span>
+                  </div>
+                  <div className="ffe-flow-arrow">➔</div>
+                  <div className="ffe-flow-step">
+                    <span className="ffe-flow-step-num">Step 2</span>
+                    <span className="ffe-flow-step-title">Adapter Registration</span>
+                    <span className="ffe-flow-step-desc">
+                      Binds adapter to template, configuring endpoint URLs, methods, and transformation spec.
+                    </span>
+                  </div>
+                  <div className="ffe-flow-arrow">➔</div>
+                  <div className="ffe-flow-step">
+                    <span className="ffe-flow-step-num">Step 3</span>
+                    <span className="ffe-flow-step-title">Execution & Assertions</span>
+                    <span className="ffe-flow-step-desc">
+                      Sends event/API requests and verifies <code>adapter_context</code> or <code>ms_inbox_events</code>.
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Local File Resolver Toolbar */}
+              <div className="ffe-config-toolbar">
+                <div className="ffe-config-toolbar-left">
+                  <button
+                    className="ffe-btn ffe-btn-primary"
+                    onClick={() => folderInputRef.current?.click()}
+                    disabled={folderResolving}
+                  >
+                    📂 {folderResolving ? 'Resolving Files…' : 'Select Project / Resources Folder'}
+                  </button>
+                  <span style={{ fontSize: '0.84rem', color: '#94a3b8' }}>
+                    Auto-match feature paths against your local files on disk
+                  </span>
+                </div>
+
+                <div className="ffe-config-toolbar-right">
+                  <span
+                    className={`ffe-status-pill ${
+                      Object.keys(resolvedFiles).length >= analysis.artifacts.payloadFiles.length
+                        ? 'resolved'
+                        : 'pending'
+                    }`}
+                  >
+                    {Object.keys(resolvedFiles).length} of {analysis.artifacts.payloadFiles.length} Payloads Loaded
+                  </span>
+                </div>
+              </div>
+
+              {/* Flow Switcher for multiple flows */}
+              {analysis.configurations.pairs.length > 1 && (
+                <div className="ffe-config-flow-switcher">
+                  <span style={{ fontSize: '0.84rem', fontWeight: 600, color: '#94a3b8' }}>
+                    Adapter Flows ({analysis.configurations.pairs.length}):
+                  </span>
+                  {analysis.configurations.pairs.map((p, idx) => (
+                    <button
+                      key={p.id}
+                      className={`ffe-btn ffe-btn-sm ${focusedFlowId === p.id ? 'ffe-btn-primary' : ''}`}
+                      onClick={() => jumpToFlow(p.id)}
+                    >
+                      Flow #{idx + 1}: {p.adapterConfig?.adapterId || `Adapter ${idx + 1}`} ({p.templateConfigs.length} {p.templateConfigs.length === 1 ? 'Template' : 'Templates'})
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* Configuration Pairs */}
+              {analysis.configurations.pairs.map((pair, pIdx) => {
+                const adapterPath = pair.adapterConfig?.path;
+                const adapterFile = adapterPath ? resolvedFiles[adapterPath] : undefined;
+                const hasAdapter = !!adapterFile;
+
+                const totalTemplates = pair.templateConfigs.length;
+                const resolvedTemplates = pair.templateConfigs.filter(t => !!resolvedFiles[t.path]);
+                const allTemplatesResolved = totalTemplates > 0 && resolvedTemplates.length === totalTemplates;
+                const hasTemplates = totalTemplates === 0 || resolvedTemplates.length > 0;
+
+                const canLaunch = hasAdapter && hasTemplates;
+
+                return (
+                  <div
+                    key={pair.id}
+                    id={`flow-${pair.id}`}
+                    className={`ffe-config-card ${focusedFlowId === pair.id ? 'ffe-focused-flow' : ''}`}
+                  >
+                    <div className="ffe-config-card-header">
+                      <div className="ffe-config-card-title">
+                        <div>
+                          <h4>
+                            Configuration Flow #{pIdx + 1}: {pair.adapterConfig?.adapterId || 'Adapter Flow'}
+                          </h4>
+                          <div className="ffe-config-match-reason">
+                            🔗 {pair.matchReason}
+                            {pair.correlationUuid && (
+                              <span style={{ color: '#a78bfa', marginLeft: '6px' }}>
+                                (UUID: {pair.correlationUuid})
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <span className={`ffe-status-pill ${canLaunch ? 'resolved' : 'pending'}`}>
+                          {canLaunch ? '✓ Ready for Review' : '⚠ Missing JSON Payloads'}
+                        </span>
+
+                        <button
+                          className="ffe-btn ffe-btn-launch"
+                          disabled={!canLaunch}
+                          onClick={() => handleOpenInReviewer(pair)}
+                          title={
+                            canLaunch
+                              ? 'Launch full configuration inspection in Adapter Reviewer'
+                              : 'Resolve or upload both Adapter and Template JSONs to inspect'
+                          }
+                        >
+                          🚀 Open in Adapter Reviewer
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="ffe-config-pair-grid">
+                      {/* Column 1: Adapter Registration */}
+                      <div className="ffe-config-col adapter">
+                        <div className="ffe-config-col-header">
+                          <span className="ffe-config-col-title">
+                            <span>🔌</span> Adapter Registration JSON
+                          </span>
+                          <span className={`ffe-status-pill ${hasAdapter ? 'resolved' : 'pending'}`}>
+                            {hasAdapter
+                              ? `✓ ${adapterFile?.source === 'bundled-sample' ? 'Sample' : 'Loaded'}`
+                              : 'Pending File'}
+                          </span>
+                        </div>
+
+                        {pair.adapterConfig && (
+                          <>
+                            <div className="ffe-config-field">
+                              <span className="ffe-config-field-label">Feature Scenario</span>
+                              <button
+                                type="button"
+                                className="ffe-scenario-link"
+                                onClick={() => jumpToScenario(pair.adapterConfig!.scenarioIndex)}
+                                title="Jump to scenario in Scenarios & Flow tab"
+                              >
+                                Scenario #{pair.adapterConfig.scenarioIndex}: {pair.adapterConfig.scenarioName} ↗
+                              </button>
+                            </div>
+
+                            <div className="ffe-config-field">
+                              <span className="ffe-config-field-label">Target REST URI</span>
+                              <span className="ffe-config-field-value">
+                                POST {pair.adapterConfig.uri || '/system/adapters'}
+                              </span>
+                            </div>
+
+                            <div className="ffe-config-field">
+                              <span className="ffe-config-field-label">Feature Payload Path</span>
+                              <span className="ffe-config-field-value">{pair.adapterConfig.path}</span>
+                            </div>
+
+                            <div className="ffe-config-actions-row">
+                              {hasAdapter ? (
+                                <button
+                                  className="ffe-btn ffe-btn-sm ffe-btn-accent"
+                                  onClick={() =>
+                                    setInspectingPayload({
+                                      name: adapterFile.name,
+                                      path: pair.adapterConfig!.path,
+                                      file: adapterFile,
+                                    })
+                                  }
+                                >
+                                  👁️ Preview JSON
+                                </button>
+                              ) : null}
+
+                              <button
+                                className="ffe-btn ffe-btn-sm"
+                                onClick={() => copyToClipboard(pair.adapterConfig!.path, 'Adapter file path')}
+                              >
+                                📋 Copy Path
+                              </button>
+
+                              <button
+                                className="ffe-btn ffe-btn-sm"
+                                onClick={() => triggerSingleUpload(pair.adapterConfig!.path)}
+                              >
+                                📤 Upload
+                              </button>
+
+                              <button
+                                className="ffe-btn ffe-btn-sm"
+                                onClick={() => {
+                                  setPastingForPath(pair.adapterConfig!.path);
+                                  setPastedText('');
+                                }}
+                              >
+                                📝 Paste
+                              </button>
+                            </div>
+                          </>
+                        )}
+                      </div>
+
+                      {/* Column 2: Template Definitions (All Associated Templates) */}
+                      <div className="ffe-config-col template">
+                        <div className="ffe-config-col-header">
+                          <span className="ffe-config-col-title">
+                            <span>🧩</span> {totalTemplates > 1 ? `Associated Templates (${totalTemplates})` : 'Template Definition JSON'}
+                          </span>
+                          <span className={`ffe-status-pill ${allTemplatesResolved ? 'resolved' : 'pending'}`}>
+                            {totalTemplates === 0
+                              ? 'No Template'
+                              : allTemplatesResolved
+                              ? `✓ ${totalTemplates > 1 ? `All ${totalTemplates} Loaded` : (resolvedFiles[pair.templateConfigs[0].path]?.source === 'bundled-sample' ? 'Sample' : 'Loaded')}`
+                              : `${resolvedTemplates.length} of ${totalTemplates} Loaded`}
+                          </span>
+                        </div>
+
+                        {totalTemplates === 0 ? (
+                          <div style={{ color: '#94a3b8', fontSize: '0.84rem', padding: '12px 0' }}>
+                            No associated template registration scenario detected for this adapter.
+                          </div>
+                        ) : (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                            {pair.templateConfigs.map((tpl, tIdx) => {
+                              const tplFile = resolvedFiles[tpl.path];
+                              const hasTpl = !!tplFile;
+
+                              return (
+                                <div key={tIdx} className="ffe-template-subcard">
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <span style={{ fontSize: '0.82rem', fontWeight: 600, color: '#38bdf8' }}>
+                                      Template #{tIdx + 1}: {tpl.fileName}
+                                    </span>
+                                    <span
+                                      className={`ffe-status-pill ${hasTpl ? 'resolved' : 'pending'}`}
+                                      style={{ fontSize: '0.72rem', padding: '2px 6px' }}
+                                    >
+                                      {hasTpl
+                                        ? `✓ ${tplFile?.source === 'bundled-sample' ? 'Sample' : 'Loaded'}`
+                                        : 'Pending File'}
+                                    </span>
+                                  </div>
+
+                                  <div className="ffe-config-field">
+                                    <span className="ffe-config-field-label">Feature Scenario</span>
+                                    <button
+                                      type="button"
+                                      className="ffe-scenario-link"
+                                      onClick={() => jumpToScenario(tpl.scenarioIndex)}
+                                      title="Jump to scenario in Scenarios & Flow tab"
+                                    >
+                                      Scenario #{tpl.scenarioIndex}: {tpl.scenarioName} ↗
+                                    </button>
+                                  </div>
+
+                                  <div className="ffe-config-field">
+                                    <span className="ffe-config-field-label">Target REST URI</span>
+                                    <span className="ffe-config-field-value">
+                                      POST {tpl.uri || '/system/adapters/templates'}
+                                    </span>
+                                  </div>
+
+                                  <div className="ffe-config-field">
+                                    <span className="ffe-config-field-label">Feature Payload Path</span>
+                                    <span className="ffe-config-field-value">{tpl.path}</span>
+                                  </div>
+
+                                  <div className="ffe-config-actions-row">
+                                    {hasTpl ? (
+                                      <button
+                                        className="ffe-btn ffe-btn-sm ffe-btn-accent"
+                                        onClick={() =>
+                                          setInspectingPayload({
+                                            name: tplFile.name,
+                                            path: tpl.path,
+                                            file: tplFile,
+                                          })
+                                        }
+                                      >
+                                        👁️ Preview JSON / XML
+                                      </button>
+                                    ) : null}
+
+                                    <button
+                                      className="ffe-btn ffe-btn-sm"
+                                      onClick={() => copyToClipboard(tpl.path, 'Template file path')}
+                                    >
+                                      📋 Copy Path
+                                    </button>
+
+                                    <button
+                                      className="ffe-btn ffe-btn-sm"
+                                      onClick={() => triggerSingleUpload(tpl.path)}
+                                    >
+                                      📤 Upload
+                                    </button>
+
+                                    <button
+                                      className="ffe-btn ffe-btn-sm"
+                                      onClick={() => {
+                                        setPastingForPath(tpl.path);
+                                        setPastedText('');
+                                      }}
+                                    >
+                                      📝 Paste
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Linked Invocations */}
+                    {pair.invocations.length > 0 && (
+                      <div className="ffe-config-invocations">
+                        <span className="ffe-config-invocations-title">
+                          ⚡ Invocation Scenarios Testing This Adapter ({pair.invocations.length})
+                        </span>
+                        <ul className="ffe-config-invocations-list">
+                          {pair.invocations.map((inv, idx) => (
+                            <li key={idx} className="ffe-config-invocations-item">
+                              <div>
+                                <button
+                                  type="button"
+                                  className="ffe-scenario-link"
+                                  style={{ fontWeight: 600, fontSize: '0.88rem' }}
+                                  onClick={() => jumpToScenario(inv.scenarioIndex)}
+                                  title="Jump to scenario in Scenarios & Flow tab"
+                                >
+                                  Scenario #{inv.scenarioIndex}: {inv.scenarioName} ↗
+                                </button>
+                                <div style={{ fontSize: '0.78rem', color: '#94a3b8', marginTop: '2px' }}>
+                                  <code>POST {inv.uri}</code> · Payload: <code>{inv.fileName}</code>
+                                </div>
+                              </div>
+                              {inv.expectedStatus && (
+                                <span
+                                  className={`ffe-status-badge ${
+                                    inv.expectedStatus < 400
+                                      ? 's2xx'
+                                      : inv.expectedStatus < 500
+                                      ? 's4xx'
+                                      : 's5xx'
+                                  }`}
+                                >
+                                  HTTP {inv.expectedStatus}
+                                </span>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+
+              {analysis.configurations.pairs.length === 0 && (
+                <div className="empty">
+                  <h3>No Adapter Configuration flows detected</h3>
+                  <p className="muted">
+                    This feature file does not reference endpoints matching <code>/system/adapters/*</code>.
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* TAB 3: API MATRIX */}
           {activeTab === 'apis' && (
             <div className="ffe-matrix-card">
               <div className="ffe-matrix-header">
                 <h3>Detected HTTP API Endpoints ({analysis.apiCalls.length})</h3>
                 <button
                   className="ffe-btn ffe-btn-sm"
-                  onClick={() => copyToClipboard(
-                    analysis.apiCalls.map(a => `${a.method} ${a.uri}`).join('\n'),
-                    'API endpoints list'
-                  )}
+                  onClick={() =>
+                    copyToClipboard(
+                      analysis.apiCalls.map(a => `${a.method} ${a.uri}`).join('\n'),
+                      'API endpoints list'
+                    )
+                  }
                 >
                   📋 Copy All Endpoints
                 </button>
@@ -568,13 +1300,19 @@ export const FeatureFileExplorer: React.FC = () => {
                           <span className={`ffe-method-badge ${api.method}`}>{api.method}</span>
                         </td>
                         <td>
-                          <span className="ffe-uri-code">{api.uri}</span>
+                          <code>{api.uri}</code>
                         </td>
                         <td>
                           {api.expectedStatus ? (
-                            <span className={`ffe-status-badge ${
-                              api.expectedStatus < 400 ? 's2xx' : api.expectedStatus < 500 ? 's4xx' : 's5xx'
-                            }`}>
+                            <span
+                              className={`ffe-status-badge ${
+                                api.expectedStatus < 400
+                                  ? 's2xx'
+                                  : api.expectedStatus < 500
+                                  ? 's4xx'
+                                  : 's5xx'
+                              }`}
+                            >
                               {api.expectedStatus}
                             </span>
                           ) : (
@@ -583,25 +1321,23 @@ export const FeatureFileExplorer: React.FC = () => {
                         </td>
                         <td>
                           {api.requestBodyFile ? (
-                            <code className="ffe-token-path" title={api.requestBodyFile}>
+                            <span style={{ fontSize: '0.8rem', wordBreak: 'break-all' }}>
                               {api.requestBodyFile.split('/').pop()}
-                            </code>
+                            </span>
                           ) : (
                             <span className="muted">—</span>
                           )}
                         </td>
                         <td>
                           {api.uuid ? (
-                            <code className="ffe-token-quote" style={{ fontSize: '0.72rem' }}>
-                              {api.uuid.substring(0, 18)}...
-                            </code>
+                            <span style={{ fontSize: '0.78rem', color: '#a78bfa' }}>{api.uuid}</span>
                           ) : (
                             <span className="muted">—</span>
                           )}
                         </td>
                         <td>
-                          <span style={{ fontSize: '0.8rem', color: '#cbd5e1' }}>
-                            #{api.scenarioIndex} {api.scenarioName}
+                          <span style={{ fontSize: '0.82rem', color: '#cbd5e1' }}>
+                            {api.scenarioName}
                           </span>
                         </td>
                         <td>
@@ -621,83 +1357,129 @@ export const FeatureFileExplorer: React.FC = () => {
             </div>
           )}
 
-          {/* TAB 3: DATA VALIDATIONS */}
+          {/* TAB 4: VALIDATIONS */}
           {activeTab === 'validations' && (
-            <div className="ffe-matrix-card">
+            <div className="ffe-validations-container">
               <div className="ffe-matrix-header">
                 <h3>Database Assertions & Validations ({analysis.dataValidations.length})</h3>
+                <span style={{ color: '#94a3b8', fontSize: '0.85rem' }}>
+                  Extracted from db criteria tables and record checks
+                </span>
               </div>
 
-              <div className="ffe-matrix-table-wrap">
-                <table className="ffe-matrix-table">
-                  <thead>
-                    <tr>
-                      <th>Target Table</th>
-                      <th>Record Count</th>
-                      <th>Filter Criteria</th>
-                      <th>Expected Values</th>
-                      <th>Scenario</th>
-                      <th>Step Line</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {analysis.dataValidations.map((val, i) => (
-                      <tr key={i}>
-                        <td>
-                          <strong style={{ color: '#5eead4', fontFamily: 'ui-monospace, monospace' }}>
-                            {val.tableName}
-                          </strong>
-                        </td>
-                        <td>
-                          {val.recordCount !== undefined ? (
-                            <span className="ffe-cell-status-processed">
-                              Count = {val.recordCount}
-                            </span>
-                          ) : (
-                            <span className="muted">—</span>
-                          )}
-                        </td>
-                        <td>
-                          {val.criteria.length > 0 ? (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              {analysis.dataValidations.map((val, idx) => (
+                <div key={idx} className="ffe-card">
+                  <div className="ffe-card-header">
+                    <div className="ffe-card-title-group">
+                      <span className="ffe-type-badge database-validation">TABLE ASSERTION</span>
+                      <h4 className="ffe-scenario-name">
+                        Table: <span style={{ color: '#38bdf8' }}>{val.tableName}</span>
+                      </h4>
+                      {val.recordCount !== undefined && (
+                        <span className="ffe-status-badge s2xx">Expected count: {val.recordCount}</span>
+                      )}
+                    </div>
+                    <span className="ffe-scenario-line">Line {val.stepLine}</span>
+                  </div>
+
+                  <div className="ffe-card-body">
+                    <p style={{ margin: '0 0 10px 0', fontSize: '0.85rem', color: '#94a3b8' }}>
+                      Context: {val.scenarioName}
+                    </p>
+
+                    {val.criteria.length > 0 && (
+                      <div style={{ marginBottom: '14px' }}>
+                        <span
+                          style={{
+                            fontSize: '0.75rem',
+                            fontWeight: 700,
+                            color: '#94a3b8',
+                            textTransform: 'uppercase',
+                          }}
+                        >
+                          Filter Criteria
+                        </span>
+                        <div className="ffe-table-wrapper" style={{ marginTop: '6px' }}>
+                          <table className="ffe-step-table">
+                            <thead>
+                              <tr>
+                                <th>Column</th>
+                                <th>Operator</th>
+                                <th>Type</th>
+                                <th>Value</th>
+                              </tr>
+                            </thead>
+                            <tbody>
                               {val.criteria.map((c, cIdx) => (
-                                <code key={cIdx} style={{ fontSize: '0.74rem', color: '#93c5fd' }}>
-                                  {c.column} {c.operator} "{c.value}"
-                                </code>
+                                <tr key={cIdx}>
+                                  <td>
+                                    <strong>{c.column}</strong>
+                                  </td>
+                                  <td>{c.operator}</td>
+                                  <td>{c.type}</td>
+                                  <td>
+                                    <code>{c.value}</code>
+                                  </td>
+                                </tr>
                               ))}
-                            </div>
-                          ) : (
-                            <span className="muted">—</span>
-                          )}
-                        </td>
-                        <td>
-                          {val.expectedValues.length > 0 ? (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+
+                    {val.expectedValues.length > 0 && (
+                      <div>
+                        <span
+                          style={{
+                            fontSize: '0.75rem',
+                            fontWeight: 700,
+                            color: '#94a3b8',
+                            textTransform: 'uppercase',
+                          }}
+                        >
+                          Expected Database Column Values
+                        </span>
+                        <div className="ffe-table-wrapper" style={{ marginTop: '6px' }}>
+                          <table className="ffe-step-table">
+                            <thead>
+                              <tr>
+                                <th>Column</th>
+                                <th>Expected Value</th>
+                              </tr>
+                            </thead>
+                            <tbody>
                               {val.expectedValues.map((ev, evIdx) => (
-                                <code key={evIdx} style={{ fontSize: '0.74rem', color: '#6ee7b7' }}>
-                                  {ev.column} = "{ev.value}"
-                                </code>
+                                <tr key={evIdx}>
+                                  <td>
+                                    <strong>{ev.column}</strong>
+                                  </td>
+                                  <td>
+                                    <span className="ffe-cell-status-processed">{ev.value}</span>
+                                  </td>
+                                </tr>
                               ))}
-                            </div>
-                          ) : (
-                            <span className="muted">—</span>
-                          )}
-                        </td>
-                        <td>
-                          <span style={{ fontSize: '0.8rem' }}>#{val.scenarioIndex} {val.scenarioName}</span>
-                        </td>
-                        <td>
-                          <span style={{ fontFamily: 'monospace', color: '#64748b' }}>Line {val.stepLine}</span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+
+              {analysis.dataValidations.length === 0 && (
+                <div className="empty">
+                  <h3>No database assertions found</h3>
+                  <p className="muted">
+                    No steps validating <code>ms_inbox_events</code> or <code>adapter_context</code> were found.
+                  </p>
+                </div>
+              )}
             </div>
           )}
 
-          {/* TAB 4: ARTIFACTS & TOKENS */}
+          {/* TAB 5: ARTIFACTS & TOKENS */}
           {activeTab === 'artifacts' && (
             <div className="ffe-artifacts-grid">
               {/* Payload Files */}
@@ -706,24 +1488,51 @@ export const FeatureFileExplorer: React.FC = () => {
                   <h4>Payload Files ({analysis.artifacts.payloadFiles.length})</h4>
                   <button
                     className="ffe-btn ffe-btn-sm"
-                    onClick={() => copyToClipboard(analysis.artifacts.payloadFiles.join('\n'), 'Payload files')}
+                    onClick={() =>
+                      copyToClipboard(analysis.artifacts.payloadFiles.join('\n'), 'Payload files')
+                    }
                   >
                     📋 Copy
                   </button>
                 </div>
                 <ul className="ffe-artifact-list">
-                  {analysis.artifacts.payloadFiles.map((file, i) => (
-                    <li key={i} className="ffe-artifact-item">
-                      <span>📄 {file}</span>
-                      <button
-                        className="ffe-btn-icon"
-                        onClick={() => copyToClipboard(file, 'file path')}
-                        title="Copy Path"
-                      >
-                        📋
-                      </button>
-                    </li>
-                  ))}
+                  {analysis.artifacts.payloadFiles.map((file, i) => {
+                    const res = resolvedFiles[file];
+                    return (
+                      <li key={i} className="ffe-artifact-item">
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                          <span>📄 {file}</span>
+                          <span style={{ fontSize: '0.72rem', color: res ? '#34d399' : '#fbbf24' }}>
+                            {res ? `✓ Resolved (${res.source})` : '⚠ File not loaded'}
+                          </span>
+                        </div>
+                        <div style={{ display: 'flex', gap: '6px' }}>
+                          {res && (
+                            <button
+                              className="ffe-btn-icon"
+                              onClick={() =>
+                                setInspectingPayload({
+                                  name: res.name,
+                                  path: file,
+                                  file: res,
+                                })
+                              }
+                              title="Preview JSON"
+                            >
+                              👁️
+                            </button>
+                          )}
+                          <button
+                            className="ffe-btn-icon"
+                            onClick={() => copyToClipboard(file, 'file path')}
+                            title="Copy Path"
+                          >
+                            📋
+                          </button>
+                        </div>
+                      </li>
+                    );
+                  })}
                   {analysis.artifacts.payloadFiles.length === 0 && (
                     <li className="muted">No payload files detected</li>
                   )}
@@ -796,7 +1605,9 @@ export const FeatureFileExplorer: React.FC = () => {
                   <h4>JWT Tokens ({analysis.artifacts.jwtTokens.length})</h4>
                   <button
                     className="ffe-btn ffe-btn-sm"
-                    onClick={() => copyToClipboard(analysis.artifacts.jwtTokens.join('\n'), 'JWT tokens')}
+                    onClick={() =>
+                      copyToClipboard(analysis.artifacts.jwtTokens.join('\n'), 'JWT tokens')
+                    }
                   >
                     📋 Copy
                   </button>
@@ -804,16 +1615,16 @@ export const FeatureFileExplorer: React.FC = () => {
                 <ul className="ffe-artifact-list">
                   {analysis.artifacts.jwtTokens.map((token, i) => (
                     <li key={i} className="ffe-artifact-item">
-                      <span style={{ color: '#38bdf8' }}>
-                        🛡️ {token.substring(0, 22)}...{token.substring(token.length - 10)} ({token.length} chars)
-                      </span>
-                      <button
-                        className="ffe-btn-icon"
-                        onClick={() => copyToClipboard(token, 'JWT Token')}
-                        title="Copy Token"
-                      >
-                        📋
-                      </button>
+                      <div className="ffe-token-pill">
+                        <span style={{ color: '#fb7185' }}>🔒 {token.substring(0, 32)}...</span>
+                        <button
+                          className="ffe-btn-icon"
+                          onClick={() => copyToClipboard(token, 'JWT Token')}
+                          title="Copy Full Token"
+                        >
+                          📋
+                        </button>
+                      </div>
                     </li>
                   ))}
                   {analysis.artifacts.jwtTokens.length === 0 && (
@@ -824,42 +1635,161 @@ export const FeatureFileExplorer: React.FC = () => {
             </div>
           )}
 
-          {/* TAB 5: HUMAN EXPLANATION */}
+          {/* TAB 6: HUMAN EXPLANATION */}
           {activeTab === 'explanation' && (
-            <div className="ffe-code-view-card">
-              <div className="ffe-code-toolbar">
-                <span style={{ fontWeight: 600, color: '#f8fafc' }}>
-                  Generated Human-Readable Documentation & Sequence
-                </span>
+            <div className="ffe-explanation-card">
+              <div className="ffe-explanation-header">
+                <h3>Structured Human-Readable Documentation</h3>
                 <button
-                  className="ffe-btn ffe-btn-primary ffe-btn-sm"
-                  onClick={() => copyToClipboard(generatedExplanation, 'Explanation markdown')}
+                  className="ffe-btn ffe-btn-sm ffe-btn-primary"
+                  onClick={() =>
+                    copyToClipboard(generatedExplanation, 'Human-Readable Markdown Documentation')
+                  }
                 >
-                  📋 Copy Markdown
+                  📋 Copy Full Documentation
                 </button>
               </div>
-              <pre className="ffe-code-content">{generatedExplanation}</pre>
+              <pre className="ffe-explanation-body">{generatedExplanation}</pre>
             </div>
           )}
 
-          {/* TAB 6: RAW FEATURE */}
+          {/* TAB 7: RAW FEATURE SOURCE */}
           {activeTab === 'raw' && (
-            <div className="ffe-code-view-card">
-              <div className="ffe-code-toolbar">
-                <span style={{ fontWeight: 600, color: '#f8fafc' }}>
-                  Raw Feature Source: {fileName || 'feature'}
-                </span>
+            <div className="ffe-explanation-card">
+              <div className="ffe-explanation-header">
+                <h3>Raw .feature Source Content</h3>
                 <button
-                  className="ffe-btn ffe-btn-primary ffe-btn-sm"
-                  onClick={() => copyToClipboard(rawText, 'Raw feature content')}
+                  className="ffe-btn ffe-btn-sm"
+                  onClick={() => copyToClipboard(rawText, 'Raw Feature Source')}
                 >
                   📋 Copy Raw Feature
                 </button>
               </div>
-              <pre className="ffe-code-content">{rawText}</pre>
+              <pre className="ffe-explanation-body" style={{ color: '#93c5fd' }}>
+                {rawText}
+              </pre>
             </div>
           )}
         </>
+      )}
+
+      {/* Inspecting Payload Modal */}
+      {inspectingPayload && (
+        <div className="ffe-modal-overlay" onClick={() => setInspectingPayload(null)}>
+          <div className="ffe-modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="ffe-modal-header">
+              <div>
+                <h3>{inspectingPayload.name}</h3>
+                <span style={{ fontSize: '0.8rem', color: '#94a3b8' }}>
+                  {inspectingPayload.path}
+                </span>
+              </div>
+              <button
+                className="ffe-btn-icon"
+                onClick={() => setInspectingPayload(null)}
+                title="Close"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="ffe-modal-body">
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <span className="ffe-status-pill resolved">
+                  Role: {inspectingPayload.file?.fileKind || 'JSON'}
+                </span>
+                <span className="ffe-status-pill resolved">
+                  Source: {inspectingPayload.file?.source || 'Local'}
+                </span>
+              </div>
+
+              {decodedXml && (
+                <div className="ffe-xml-preview-box">
+                  <h5>Camel Route XML (Decoded from xmlRoute)</h5>
+                  <pre className="ffe-json-pre">{decodedXml}</pre>
+                </div>
+              )}
+
+              <h5 style={{ margin: '8px 0 0 0', color: '#94a3b8', fontSize: '0.85rem' }}>
+                Raw JSON Payload
+              </h5>
+              <pre className="ffe-json-pre">
+                {inspectingPayload.file?.rawText || 'No text content available'}
+              </pre>
+            </div>
+
+            <div className="ffe-modal-footer">
+              <button
+                className="ffe-btn ffe-btn-sm"
+                onClick={() =>
+                  copyToClipboard(
+                    inspectingPayload.file?.rawText || '',
+                    inspectingPayload.name
+                  )
+                }
+              >
+                📋 Copy JSON
+              </button>
+              <button
+                className="ffe-btn ffe-btn-sm ffe-btn-primary"
+                onClick={() => setInspectingPayload(null)}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Pasting JSON Modal */}
+      {pastingForPath && (
+        <div className="ffe-modal-overlay" onClick={() => setPastingForPath(null)}>
+          <div className="ffe-modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="ffe-modal-header">
+              <div>
+                <h3>Paste JSON Payload</h3>
+                <span style={{ fontSize: '0.8rem', color: '#94a3b8' }}>
+                  For target path: <code>{pastingForPath}</code>
+                </span>
+              </div>
+              <button
+                className="ffe-btn-icon"
+                onClick={() => setPastingForPath(null)}
+                title="Close"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="ffe-modal-body">
+              <p style={{ margin: 0, fontSize: '0.85rem', color: '#cbd5e1' }}>
+                Paste the adapter configuration or template definition JSON content below:
+              </p>
+              <textarea
+                className="ffe-paste-textarea"
+                placeholder='{ "type": "EVENTTOAPI", "name": "...", "templates": [ ... ] }'
+                value={pastedText}
+                onChange={(e) => setPastedText(e.target.value)}
+              />
+            </div>
+
+            <div className="ffe-modal-footer">
+              <button
+                className="ffe-btn ffe-btn-sm"
+                onClick={() => setPastingForPath(null)}
+              >
+                Cancel
+              </button>
+              <button
+                className="ffe-btn ffe-btn-sm ffe-btn-accent"
+                disabled={!pastedText.trim()}
+                onClick={handleSavePastedJson}
+              >
+                Save & Resolve
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Floating Toast Notification */}
@@ -927,8 +1857,8 @@ const StepItem: React.FC<StepItemProps> = ({ step, onCopy }) => {
       )}
 
       {step.docString && (
-        <pre className="ffe-jwt-expanded" style={{ marginLeft: '104px' }}>
-          {step.docString}
+        <pre className="ffe-docstring">
+          <code>{step.docString}</code>
         </pre>
       )}
     </li>
@@ -936,7 +1866,7 @@ const StepItem: React.FC<StepItemProps> = ({ step, onCopy }) => {
 };
 
 // -----------------------------------------------------------------------------
-// Helper Component: FormattedStepText with Token Truncation
+// Helper Component: FormattedStepText
 // -----------------------------------------------------------------------------
 
 interface FormattedStepTextProps {
@@ -945,78 +1875,92 @@ interface FormattedStepTextProps {
 }
 
 const FormattedStepText: React.FC<FormattedStepTextProps> = ({ text, onCopy }) => {
-  const [jwtExpanded, setJwtExpanded] = useState<boolean>(false);
+  const [tokenExpanded, setTokenExpanded] = useState<boolean>(false);
 
-  // Check for JWT token pattern
-  const jwtMatch = text.match(/(jwt\s+)?(eyJ[a-zA-Z0-9_\-\.]{30,})/);
+  const parts = text.split(/("[^"]*")/g);
 
-  if (jwtMatch) {
-    const prefix = text.substring(0, jwtMatch.index);
-    const token = jwtMatch[2];
-    const suffix = text.substring((jwtMatch.index || 0) + jwtMatch[0].length);
-    const preview = `${token.substring(0, 16)}...${token.substring(token.length - 12)}`;
+  return (
+    <span>
+      {parts.map((part, index) => {
+        if (part.startsWith('"') && part.endsWith('"')) {
+          const inner = part.slice(1, -1);
 
-    return (
-      <span>
-        {renderQuotedText(prefix)}
-        <span className="ffe-jwt-chip-container">
-          <span className="ffe-jwt-chip">
-            <span className="ffe-jwt-tag">JWT TOKEN</span>
-            <span className="ffe-jwt-preview">{preview}</span>
-            <span style={{ color: '#64748b' }}>({token.length} chars)</span>
-            <button
-              className="ffe-btn-icon"
-              onClick={(e) => {
-                e.stopPropagation();
-                onCopy(token, 'JWT Token');
-              }}
-              title="Copy full JWT"
-            >
-              📋
-            </button>
-            <button
-              className="ffe-btn-icon"
-              onClick={(e) => {
-                e.stopPropagation();
-                setJwtExpanded(!jwtExpanded);
-              }}
-              title={jwtExpanded ? 'Collapse token' : 'Expand full token'}
-            >
-              {jwtExpanded ? '▲' : '▼'}
-            </button>
-          </span>
-          {jwtExpanded && (
-            <div className="ffe-jwt-expanded">
-              {token}
-            </div>
-          )}
-        </span>
-        {renderQuotedText(suffix)}
-      </span>
-    );
-  }
+          if (inner.startsWith('jwt eyJ') || inner.startsWith('eyJ')) {
+            const token = inner.startsWith('jwt ') ? inner.substring(4) : inner;
+            const preview = `${token.substring(0, 16)}...${token.slice(-8)}`;
 
-  return <>{renderQuotedText(text)}</>;
+            return (
+              <span key={index} className="ffe-token-pill">
+                <span className="ffe-token-icon">🔒</span>
+                <span className="ffe-token-preview">jwt {tokenExpanded ? token : preview}</span>
+                <button
+                  type="button"
+                  className="ffe-btn-icon"
+                  onClick={() => setTokenExpanded(!tokenExpanded)}
+                  title={tokenExpanded ? 'Collapse Token' : 'Expand Token'}
+                >
+                  {tokenExpanded ? '▲' : '▼'}
+                </button>
+                <button
+                  type="button"
+                  className="ffe-btn-icon"
+                  onClick={() => onCopy(token, 'JWT Token')}
+                  title="Copy Full Token"
+                >
+                  📋
+                </button>
+              </span>
+            );
+          }
+
+          if (inner.includes('-') && inner.length >= 16) {
+            return (
+              <span key={index} className="ffe-uuid-pill">
+                <span>🔑 {inner}</span>
+                <button
+                  type="button"
+                  className="ffe-btn-icon"
+                  onClick={() => onCopy(inner, 'UUID')}
+                  title="Copy UUID"
+                >
+                  📋
+                </button>
+              </span>
+            );
+          }
+
+          if (inner.endsWith('.json') || inner.endsWith('.xml') || inner.endsWith('.txt')) {
+            return (
+              <code key={index} className="ffe-path-highlight">
+                📄 {inner}
+              </code>
+            );
+          }
+
+          if (
+            inner.startsWith('/system/') ||
+            inner.startsWith('/api/') ||
+            inner.startsWith('system/') ||
+            inner.startsWith('http://') ||
+            inner.startsWith('https://')
+          ) {
+            return (
+              <code key={index} className="ffe-endpoint-highlight">
+                🌐 {inner}
+              </code>
+            );
+          }
+
+          return (
+            <code key={index} className="ffe-param-highlight">
+              {part}
+            </code>
+          );
+        }
+        return <span key={index}>{part}</span>;
+      })}
+    </span>
+  );
 };
-
-function renderQuotedText(str: string): React.ReactNode {
-  const parts = str.split(/(".*?"|'.*?')/g);
-
-  return parts.map((part, index) => {
-    if ((part.startsWith('"') && part.endsWith('"')) || (part.startsWith("'") && part.endsWith("'"))) {
-      const inner = part.slice(1, -1);
-      const isPath = inner.includes('/') || inner.endsWith('.json') || inner.endsWith('.xml');
-      return (
-        <code
-          key={index}
-          className={isPath ? 'ffe-token-path' : 'ffe-token-quote'}
-        >
-          {part}
-        </code>
-      );
-    }
-    return <span key={index}>{part}</span>;
-  });
-}
 
 export default FeatureFileExplorer;

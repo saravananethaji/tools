@@ -59,4 +59,42 @@ describe('app shell', () => {
     act(() => { single.click(); });
     expect(mounted.host.querySelector('input[aria-label="Select a use-case folder"]')).toBeNull();
   });
+
+  it('loads sample feature in feature explorer and transitions to adapter reviewer on launch', () => {
+    mounted = mount();
+    // 1. Switch to Feature Explorer
+    const featTab = Array.from(mounted.host.querySelectorAll('[role="tab"]'))
+      .find((t) => t.textContent === 'Feature Explorer') as HTMLButtonElement;
+    act(() => { featTab.click(); });
+
+    // 2. Click "Load Sample Feature"
+    const loadSampleBtn = Array.from(mounted.host.querySelectorAll('button'))
+      .find((b) => b.textContent?.includes('Load Sample Feature')) as HTMLButtonElement;
+    expect(loadSampleBtn).toBeDefined();
+    act(() => { loadSampleBtn.click(); });
+
+    // 3. Switch to "Adapter & Templates" tab
+    const adapterTab = Array.from(mounted.host.querySelectorAll('[role="tab"]'))
+      .find((t) => t.textContent?.includes('Adapter & Templates')) as HTMLButtonElement;
+    expect(adapterTab).toBeDefined();
+    act(() => { adapterTab.click(); });
+
+    // 4. Verify Adapter configuration flow card is displayed
+    expect(mounted.host.innerHTML).toContain('generic.Routeid');
+    expect(mounted.host.innerHTML).toContain('direct:ApiToApi');
+    expect(mounted.host.innerHTML).toContain('Ready for Review');
+
+    // 5. Click "Open in Adapter Reviewer"
+    const launchBtn = Array.from(mounted.host.querySelectorAll('button'))
+      .find((b) => b.textContent?.includes('Open in Adapter Reviewer')) as HTMLButtonElement;
+    expect(launchBtn).toBeDefined();
+    expect(launchBtn.disabled).toBe(false);
+    act(() => { launchBtn.click(); });
+
+    // 6. Verify view has transitioned to single adapter review with loaded configuration
+    expect(mounted.host.innerHTML).toContain('Adapter configuration review');
+    expect(mounted.host.innerHTML).toContain('direct:eventtoapi.json.process');
+    expect(mounted.host.innerHTML).toContain('SEPA PAYMENT EVENT TO REST API CALL');
+  });
 });
+

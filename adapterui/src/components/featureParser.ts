@@ -47,6 +47,55 @@ export interface FeatureScenario {
   dbValidations: DbValidation[];
 }
 
+export interface DetectedAdapterConfig {
+  scenarioIndex: number;
+  scenarioName: string;
+  path: string;
+  fileName: string;
+  adapterId?: string;
+  uri?: string;
+  uuid?: string;
+  stepLine: number;
+}
+
+export interface DetectedTemplateConfig {
+  scenarioIndex: number;
+  scenarioName: string;
+  path: string;
+  fileName: string;
+  templateId?: string;
+  uri?: string;
+  uuid?: string;
+  stepLine: number;
+}
+
+export interface DetectedInvocationConfig {
+  scenarioIndex: number;
+  scenarioName: string;
+  path: string;
+  fileName: string;
+  uri?: string;
+  uuid?: string;
+  expectedStatus?: number;
+  stepLine: number;
+}
+
+export interface ConfigPair {
+  id: string;
+  adapterConfig?: DetectedAdapterConfig;
+  templateConfigs: DetectedTemplateConfig[];
+  invocations: DetectedInvocationConfig[];
+  correlationUuid?: string;
+  matchReason: string;
+}
+
+export interface FeatureConfigurations {
+  adapterConfigs: DetectedAdapterConfig[];
+  templateConfigs: DetectedTemplateConfig[];
+  invocationConfigs: DetectedInvocationConfig[];
+  pairs: ConfigPair[];
+}
+
 export interface FeatureAnalysis {
   feature: {
     name: string;
@@ -70,6 +119,7 @@ export interface FeatureAnalysis {
     jwtTokens: string[];
     dbTables: string[];
   };
+  configurations: FeatureConfigurations;
   stats: {
     totalScenarios: number;
     totalSteps: number;
@@ -102,6 +152,12 @@ export function parseFeatureText(content: string): FeatureAnalysis {
       uuids: [],
       jwtTokens: [],
       dbTables: [],
+    },
+    configurations: {
+      adapterConfigs: [],
+      templateConfigs: [],
+      invocationConfigs: [],
+      pairs: [],
     },
     stats: {
       totalScenarios: 0,
@@ -319,7 +375,8 @@ export function parseFeatureText(content: string): FeatureAnalysis {
       const uriMatch = step.text.match(/MS request URI is "([^"]+)"/i) ||
                        step.text.match(/request URI is "([^"]+)"/i) ||
                        step.text.match(/sent to "([^"]+)"/i) ||
-                       step.text.match(/["'](\/(?:system|api)[^"']*)["']/i);
+                       step.text.match(/request is made to "([^"]+)"/i) ||
+                       step.text.match(/["'](\/(?:system|api|jobs)[^"']*)["']/i);
       if (uriMatch) {
         pendingUri = uriMatch[1];
       }
@@ -333,7 +390,8 @@ export function parseFeatureText(content: string): FeatureAnalysis {
 
       // Check Body File
       const bodyMatch = step.text.match(/MS request body is set to the contents of "([^"]+)"/i) ||
-                        step.text.match(/contents of "([^"]+\.(?:json|xml|txt))"/i);
+                        step.text.match(/contents of "([^"]+\.(?:json|xml|txt))"/i) ||
+                        step.text.match(/payload\s+"([^"]+\.(?:json|xml|txt))"/i);
       if (bodyMatch) {
         requestBodyFile = bodyMatch[1];
         payloadFilesSet.add(bodyMatch[1]);
@@ -451,6 +509,258 @@ export function parseFeatureText(content: string): FeatureAnalysis {
     analysis.background.steps.length +
     analysis.scenarios.reduce((acc, s) => acc + s.steps.length, 0);
 
+  // Third pass: Meaningful understanding of Adapter & Template configurations
+  const adapterConfigs: DetectedAdapterConfig[] = [];
+  const templateConfigs: DetectedTemplateConfig[] = [];
+  const invocationConfigs: DetectedInvocationConfig[] = [];
+
+  const inspectCallForConfig = (
+    scenarioIndex: number,
+    scenarioName: string,
+    uri: string,
+    requestBodyFile?: string,
+    uuid?: string,
+    stepLine: number = 1,
+    expectedStatus?: number
+  ) => {
+    if (!requestBodyFile) return;
+    const cleanUri = uri || '';
+    const lowerUri = cleanUri.toLowerCase();
+    const lowerName = scenarioName.toLowerCase();
+    const fileName = requestBodyFile.split('/').pop() || requestBodyFile;
+    const lowerFile = fileName.toLowerCase();
+
+    // Check if this is an API invocation / execution test
+    const isInvocation =
+      lowerName.includes('invoke') ||
+      lowerName.includes('execution') ||
+      lowerName.includes('trigger') ||
+      lowerName.includes('internally') ||
+      lowerName.includes('negative') ||
+      lowerUri.includes('/jobs/') ||
+      lowerUri.includes('jobs') ||
+      (!lowerUri.includes('/adapters') && (lowerUri.includes('/system/') || lowerUri.includes('/api/')));
+
+    // Check for Template Configuration
+    const templateUriMatch = cleanUri.match(/\/system\/adapters\/templates\/([^"'\s]+)/i);
+    const isTemplateUri = !!templateUriMatch || lowerUri.includes('/templates/');
+    const isTemplateName =
+      (lowerName.includes('template configuration') ||
+        lowerName.includes('create a template') ||
+        lowerName.includes('register a template')) &&
+      !isInvocation;
+    const isTemplateFile =
+      (lowerFile.includes('template') || lowerFile.includes('templateconfig')) && !isInvocation;
+
+    // Check for Adapter Configuration
+    const adapterUriMatch = !isTemplateUri ? cleanUri.match(/\/system\/adapters\/([^"'\s/]+)$/i) : null;
+    const isAdapterUri =
+      !isTemplateUri &&
+      !isInvocation &&
+      (!!adapterUriMatch || (lowerUri.startsWith('/system/adapters') && !lowerUri.includes('/templates')));
+    const isAdapterName =
+      (lowerName.includes('adapter configuration') ||
+        lowerName.includes('create an adapter') ||
+        lowerName.includes('register an adapter')) &&
+      !isInvocation;
+    const isAdapterFile =
+      (lowerFile.includes('adapterconflayout') ||
+        lowerFile.includes('adapterconfig') ||
+        lowerFile.includes('adapter_config')) &&
+      !isInvocation;
+
+    if (isInvocation) {
+      invocationConfigs.push({
+        scenarioIndex,
+        scenarioName,
+        path: requestBodyFile,
+        fileName,
+        uri: cleanUri,
+        uuid,
+        expectedStatus,
+        stepLine,
+      });
+    } else if (isTemplateUri || isTemplateName || isTemplateFile) {
+      let templateId = templateUriMatch ? templateUriMatch[1] : undefined;
+      if (!templateId) {
+        const idMatch = scenarioName.match(/(?:direct:[a-zA-Z0-9_.-]+|[a-zA-Z0-9_.-]+Template)/i);
+        if (idMatch) templateId = idMatch[0];
+      }
+      templateConfigs.push({
+        scenarioIndex,
+        scenarioName,
+        path: requestBodyFile,
+        fileName,
+        templateId,
+        uri: cleanUri,
+        uuid,
+        stepLine,
+      });
+    } else if (isAdapterUri || isAdapterName || isAdapterFile) {
+      let adapterId = adapterUriMatch ? adapterUriMatch[1] : undefined;
+      if (!adapterId) {
+        const idMatch = scenarioName.match(/(?:generic\.[a-zA-Z0-9_.-]+|[a-zA-Z0-9_.-]+Adapter)/i);
+        if (idMatch) adapterId = idMatch[0];
+      }
+      adapterConfigs.push({
+        scenarioIndex,
+        scenarioName,
+        path: requestBodyFile,
+        fileName,
+        adapterId,
+        uri: cleanUri,
+        uuid,
+        stepLine,
+      });
+    } else {
+      invocationConfigs.push({
+        scenarioIndex,
+        scenarioName,
+        path: requestBodyFile,
+        fileName,
+        uri: cleanUri,
+        uuid,
+        expectedStatus,
+        stepLine,
+      });
+    }
+  };
+
+  // Inspect Background
+  if (analysis.background.requestBodyFile) {
+    inspectCallForConfig(
+      0,
+      'Background Pre-conditions',
+      '',
+      analysis.background.requestBodyFile,
+      analysis.background.headers['UUID'],
+      analysis.background.lineNumber || 1,
+      analysis.background.expectedStatus
+    );
+  }
+
+  // Inspect all API calls
+  for (const api of analysis.apiCalls) {
+    inspectCallForConfig(
+      typeof api.scenarioIndex === 'number' ? api.scenarioIndex : 0,
+      api.scenarioName,
+      api.uri,
+      api.requestBodyFile,
+      api.uuid,
+      api.stepLine,
+      api.expectedStatus
+    );
+  }
+
+  // Deduplicate entries by path and scenarioIndex
+  const dedup = <T extends { path: string; scenarioIndex: number }>(items: T[]): T[] => {
+    const seen = new Set<string>();
+    return items.filter(item => {
+      const key = `${item.path}#${item.scenarioIndex}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  };
+
+  const finalAdapters = dedup(adapterConfigs);
+  const finalTemplates = dedup(templateConfigs);
+  const finalInvocations = dedup(invocationConfigs);
+
+  // Correlate into configuration pairs
+  const pairs: ConfigPair[] = [];
+  finalAdapters.forEach((adapter, idx) => {
+    // 1. Match by correlation UUID
+    let matchedTemplates = finalTemplates.filter(t => t.uuid && adapter.uuid && t.uuid === adapter.uuid);
+
+    // 2. Match by common directory in path
+    if (matchedTemplates.length === 0) {
+      const adapterDir = adapter.path.substring(0, adapter.path.lastIndexOf('/'));
+      matchedTemplates = finalTemplates.filter(t => {
+        const tplDir = t.path.substring(0, t.path.lastIndexOf('/'));
+        return adapterDir && tplDir && adapterDir === tplDir;
+      });
+    }
+
+    // 3. Match by scenario sequence / proximity for multiple adapters
+    if (matchedTemplates.length === 0 && finalAdapters.length > 1) {
+      const prevAdapterScenario = idx > 0 ? finalAdapters[idx - 1].scenarioIndex : 0;
+      const nextAdapterScenario = idx < finalAdapters.length - 1 ? finalAdapters[idx + 1].scenarioIndex : 999999;
+      matchedTemplates = finalTemplates.filter(
+        t => t.scenarioIndex > prevAdapterScenario && t.scenarioIndex <= adapter.scenarioIndex
+      );
+      if (matchedTemplates.length === 0) {
+        matchedTemplates = finalTemplates.filter(
+          t => t.scenarioIndex >= adapter.scenarioIndex && t.scenarioIndex < nextAdapterScenario
+        );
+      }
+    }
+
+    // 4. Fallback: all templates if only 1 adapter exists
+    if (matchedTemplates.length === 0 && finalAdapters.length === 1 && finalTemplates.length > 0) {
+      matchedTemplates = finalTemplates;
+    }
+
+    // Find invocations matching UUID, folder, name/URI, or scenario proximity
+    const invocations = finalInvocations.filter(inv => {
+      if (adapter.uuid && inv.uuid && adapter.uuid === inv.uuid) return true;
+      const adapterDir = adapter.path.substring(0, adapter.path.lastIndexOf('/'));
+      const invDir = inv.path.substring(0, inv.path.lastIndexOf('/'));
+      if (adapterDir && invDir && adapterDir === invDir) return true;
+
+      // Check explicit identifier or filename matches
+      const adapterBase = adapter.fileName.replace(/\.[^.]+$/, '').toLowerCase();
+      const adapterId = adapter.adapterId?.toLowerCase();
+      const invText = `${inv.uri} ${inv.scenarioName} ${inv.path}`.toLowerCase();
+      if (adapterId && invText.includes(adapterId)) return true;
+      if (adapterBase && adapterBase.length > 3 && invText.includes(adapterBase)) return true;
+
+      if (finalAdapters.length > 1) {
+        const nextAdapterScenario = idx < finalAdapters.length - 1 ? finalAdapters[idx + 1].scenarioIndex : 999999;
+        return inv.scenarioIndex > adapter.scenarioIndex && inv.scenarioIndex < nextAdapterScenario;
+      }
+      return true;
+    });
+
+    const reasons: string[] = [];
+    if (adapter.uuid && matchedTemplates.some(t => t.uuid === adapter.uuid)) {
+      reasons.push(`Matching UUID: ${adapter.uuid}`);
+    }
+    const adapterDir = adapter.path.split('/').slice(-2, -1)[0];
+    if (adapterDir) {
+      reasons.push(`Shared path group: '${adapterDir}'`);
+    }
+    if (reasons.length === 0) {
+      reasons.push(`Sequential scenario flow #${idx + 1}`);
+    }
+
+    pairs.push({
+      id: `pair-${idx + 1}`,
+      adapterConfig: adapter,
+      templateConfigs: matchedTemplates,
+      invocations,
+      correlationUuid: adapter.uuid,
+      matchReason: reasons.join(' · '),
+    });
+  });
+
+  // If no adapter was found, but template configs exist
+  if (finalAdapters.length === 0 && finalTemplates.length > 0) {
+    pairs.push({
+      id: 'pair-template-only',
+      templateConfigs: finalTemplates,
+      invocations: finalInvocations,
+      matchReason: 'Standalone template configuration(s)',
+    });
+  }
+
+  analysis.configurations = {
+    adapterConfigs: finalAdapters,
+    templateConfigs: finalTemplates,
+    invocationConfigs: finalInvocations,
+    pairs,
+  };
+
   analysis.stats = {
     totalScenarios: analysis.scenarios.length,
     totalSteps,
@@ -537,6 +847,36 @@ export function generateMarkdownExplanation(analysis: FeatureAnalysis): string {
       doc += `- ${note}\n`;
     });
     doc += `\n`;
+  }
+
+  // Adapter & Template Configurations
+  if (analysis.configurations && (analysis.configurations.pairs.length > 0 || analysis.configurations.adapterConfigs.length > 0)) {
+    doc += `## Adapter & Template Configurations\n\n`;
+    analysis.configurations.pairs.forEach((pair, idx) => {
+      doc += `### Configuration Flow ${idx + 1}\n`;
+      doc += `**Correlation:** ${pair.matchReason}\n\n`;
+      if (pair.templateConfigs.length > 0) {
+        pair.templateConfigs.forEach(t => {
+          doc += `- **Template Definition:** \`${t.path}\`\n`;
+          doc += `  - Endpoint: \`${t.uri || 'POST /system/adapters/templates'}\`\n`;
+          if (t.templateId) doc += `  - Template ID: \`${t.templateId}\`\n`;
+          doc += `  - Declared in: ${t.scenarioName} (Line ${t.stepLine})\n`;
+        });
+      }
+      if (pair.adapterConfig) {
+        doc += `- **Adapter Registration:** \`${pair.adapterConfig.path}\`\n`;
+        doc += `  - Endpoint: \`${pair.adapterConfig.uri || 'POST /system/adapters'}\`\n`;
+        if (pair.adapterConfig.adapterId) doc += `  - Adapter ID: \`${pair.adapterConfig.adapterId}\`\n`;
+        doc += `  - Declared in: ${pair.adapterConfig.scenarioName} (Line ${pair.adapterConfig.stepLine})\n`;
+      }
+      if (pair.invocations.length > 0) {
+        doc += `- **Invocations (${pair.invocations.length}):**\n`;
+        pair.invocations.forEach(inv => {
+          doc += `  - \`${inv.path}\` -> \`${inv.uri}\` (${inv.scenarioName})\n`;
+        });
+      }
+      doc += `\n`;
+    });
   }
 
   // Background

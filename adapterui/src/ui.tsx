@@ -29,10 +29,9 @@ export function useTableOverflow() {
   React.useEffect(() => {
     const el = ref.current; if (!el) return;
     const update = () => el.classList.toggle('is-overflowing', el.scrollWidth > el.clientWidth);
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(el);
-    return () => ro.disconnect();
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(update) : null;
+    ro?.observe(el);
+    return () => ro?.disconnect();
   }, []);
   return ref;
 }
