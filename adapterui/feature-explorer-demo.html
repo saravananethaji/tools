@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Feature File Explorer Demo</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #2c3e50;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .feature-content {
+            background: #f8f9fa;
+            border-left: 4px solid #3498db;
+            padding: 20px;
+            margin: 20px 0;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 14px;
+            overflow-x: auto;
+        }
+        .btn {
+            background: #3498db;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 10px 5px;
+            transition: background 0.3s;
+        }
+        .btn:hover {
+            background: #2980b9;
+        }
+        .results {
+            margin-top: 30px;
+            padding: 20px;
+            background: #ecf0f1;
+            border-radius: 8px;
+        }
+        .section {
+            margin: 20px 0;
+        }
+        .section h3 {
+            color: #2c3e50;
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 5px;
+        }
+        ul {
+            padding-left: 20px;
+        }
+        li {
+            margin: 8px 0;
+            line-height: 1.6;
+        }
+        .highlight {
+            background: #fff3cd;
+            padding: 2px 4px;
+            border-radius: 3px;
+            font-weight: bold;
+        }
+        footer {
+            text-align: center;
+            margin-top: 40px;
+            color: #7f8c8d;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Feature File Explorer Tool</h1>
+        <p>This tool analyzes Gherkin/Cucumber .feature files to explain:</p>
+        <ul>
+            <li>Execution flow and dependencies</li>
+            <li>API calls and endpoints</li>
+            <li>Expected responses and validations</li>
+            <li>Database interactions</li>
+            <li>Test data artifacts used</li>
+        </ul>
+        
+        <button class="btn" onclick="loadSampleFeature()">Load Sample Feature File</button>
+        <button class="btn" onclick="analyzeFeature()">Analyze Feature</button>
+        
+        <div id="feature-content" class="feature-content" style="display: none;">
+            <!-- Feature content will be loaded here -->
+        </div>
+        
+        <div id="analysis-results" class="results" style="display: none;">
+            <!-- Analysis results will be displayed here -->
+        </div>
+    </div>
+
+    <script>
+        // Sample feature content (the decoded base64 content)
+        const sampleFeature = `Feature: 01_adapter_apitoapi validation
+
+  # =========================================================
+  # TEST DATA DEPENDENCIES
+  # This feature is self-contained. No prior feature execution required.
+  # It creates the following records used by other features:
+  #   - Template  : direct:ApiToApi  (POST /system/adapters/templates/direct:ApiToApi)
+  #   - Adapter   : generic.Routeid  (POST /system/adapters/generic.Routeid)
+  #
+  # INTERNAL DEPENDENCIES (scenario order matters):
+  #   Scenario 3 ("To invoke an API internally...") requires Scenario 1 and 2
+  #   to have created the template and adapter first.
+  # ============================================================
+
+Background:
+	Given Set the test backgound
+	And MS request header "Content-Type" is set to "application/json"
+	And MS request header "Authorization" is set to "jwt eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+	And MS request header "UUID" is set to "adapqi-da5244e-a140-470e-83ad-768cb225640"
+	And the MS request body is set to the contents of "src/test/resources/integration-cucumber-json-payload/usecasesjsonpayload/02_apitoapi/apitoapirequestpayload.json"
+	When a "POST" request is sent to MS
+	And log all MS response in console
+	Then MS response code should be 201
+
+Scenario: To create a template configuration persisting to API to API using HTTP POST METHOD
+	And MS request URI is "/system/adapters/templates/direct:ApiToApi"
+	And MS request header "UUID" is set to "adapqi-da5244e-a140-470e-83ad-768cb225640"
+	And the MS request body is set to the contents of "src/test/resources/test/resources/integration-cucumber-json-payload/usecasesjsonpayload/02_apitoapi/apitoapirequestpayload.json"
+	When a "POST" request is sent to MS
+	And log all MS response in console
+	Then MS response code should be 201
+
+Scenario: To create an adapter configuration persisting to API to API using HTTP POST METHOD
+	And MS request URI is "/system/adapters/generic.Routeid"
+	And MS request header "UUID" is set to "adapqi-da5244e-a140-470e-83ad-768cb225640"
+	And the MS request body is set to the contents of "src/test/resources/integration-cucumber-json-payload/usecasesjsonpayload/02_apitoapi/apitoapiadapterconflayoutpayload.json"
+	When a "POST" request is sent to MS
+	And log all MS response in console
+	Then MS response code should be 201
+
+Scenario: To validate Application Context Map while executing API to API use case
+	# Then Set the following data criteria
+	# | TestCaseID      | ColumnName | Operator | DataType | ColumnValue |
+	# | MS-UseCaseTest-Adapter-MS-002| key      | eq | string | c68dba2e-7fdc-46ab-9776-94e90cf3f6d5_invoices |
+	# | MS-UseCaseTest-Adapter-MS-002| namespace| eq | string | Codat |
+	#
+	# And Validate the below details from the db table adapter_context and check no of record is 1
+	#
+	# | TestCaseID | ColumnName | ColumnValue |
+	# | MS-UseCaseTest-Adapter-MS-002| value | 9 |
+	#
+	# Then Set the following data criteria
+	# | TestCaseID | ColumnName | Operator | DataType | ColumnValue |
+	# | MS-UseCaseTest-Adapter-MS-002| key      | eq | string | c68dba2e-7fdc-46ab-9776-94e90cf3f6d5_test |
+	# | MS-UseCaseTest-Adapter-MS-002| namespace| eq | string | Codat |
+	#
+	# And Validate the below details from the db table adapter_context and check no of record is 1
+	#
+	# | TestCaseID | ColumnName | ColumnValue |
+	# | MS-UseCaseTest-Adapter-MS-002| value  | 9 |
+
+Scenario: To validate API to API execution by checking status in ms_inbox_events table
+	
+	Then Set the following data criteria
+	  | TestCaseID                     | ColumnName | Operator | DataType | ColumnValue                                 |
+	  | MS-UseCaseTest-Adapter-MS-003 | eventId    | eq       | string   | adapqi-da5244e-a140-470e-83ad-768cb225640   |
+	  | MS-UseCaseTest-Adapter-MS-003 | eventType  | eq       | string   | ms-adapterservice.ApiToApi                 |
+	
+	  And Validate the below details from the db table ms_inbox_events and check no of record is 1
+	    | TestCaseID                     | ColumnName | ColumnValue |
+	    | MS-UseCaseTest-Adapter-MS-003 | status     | PROCESSED  |
+	    
+#InvalidInputException
+Scenario: To invoke an API internally using an Adapter API HTTP POST METHOD Y
+	And MS request URI is "system/apitoapijobs/ApiToApi"
+	And MS request header "UUID" is set to "adapqn-da5244e-a140-470e-83ad-768cb225640"
+	And the MS request body is set to the contents of "src/test/resources/integration-cucumber-json-payload/usecasesjsonpayload/02_apitoapi/apitoapirequestpayload_negative.json"
+	When a "POST" request is sent to MS
+	And log all MS response in console
+	Then MS response code should be 400
+
+#ExecuteeventAPIFailure
+Scenario: To invoke an API internally using an Adapter API HTTP POST METHOD 
+	And MS request URI is "system/apitoapijobs/ApiToApi"
+	And MS request header "UUID" is set to "adapqn-da5244e-a140-470e-83ad-768cb225640"
+	And MS request header "httpEndPoint" is set to "http://dummyip:3000/irf-provider-container/api/v1.0.0/order/paymentOrders/sepaInstantPayment"
+	And the MS request body is set to the contents of "src/test/resources/integration-cucumber-json-payload/usecasesjsonpayload/02_apitoapi/apitoapirequestpayload.json"
+	When a "POST" request is sent to MS
+	And log all MS response in console
+	Then MS response code should be 500`;
+
+        function loadSampleFeature() {
+            document.getElementById('feature-content').textContent = sampleFeature;
+            document.getElementById('feature-content').style.display = 'block';
+        }
+
+        function analyzeFeature() {
+            const featureContent = document.getElementById('feature-content').textContent;
+            if (!featureContent.trim()) {
+                alert('Please load a feature file first');
+                return;
+            }
+
+            const analysis = analyzeFeatureFile(featureContent);
+            displayAnalysis(analysis);
+        }
+
+        function analyzeFeatureFile(content) {
+            const lines = content.split('\n').map(line => line.trim());
+            
+            const analysis = {
+                feature: {
+                    name: '',
+                    description: []
+                },
+                background: {
+                    steps: []
+                },
+                scenarios: [],
+                apiCalls: [],
+                dataValidations: [],
+                artifacts: new Set(),
+                dependencies: []
+            };
+
+            let currentSection = null;
+            let currentScenario = null;
+
+            lines.forEach((line, index) => {
+                // Feature declaration
+                if (line.startsWith('Feature:')) {
+                    analysis.feature.name = line.substring(8).trim();
+                    currentSection = 'feature';
+                    return;
+                }
+
+                // Feature description
+                if (currentSection === 'feature' && line && !line.startsWith('#') && 
+                    !line.startsWith('Background:') && !line.startsWith('Scenario:')) {
+                    if (line) analysis.feature.description.push(line);
+                    return;
+                }
+
+                // Background
+                if (line.startsWith('Background:')) {
+                    currentSection = 'background';
+                    return;
+                }
+
+                // Scenario
+                if (line.startsWith('Scenario:')) {
+                    const scenarioName = line.substring(9).trim();
+                    currentScenario = {
+                        name: scenarioName,
+                        steps: [],
+                        lineNumber: index + 1
+                    };
+                    analysis.scenarios.push(currentScenario);
+                    currentSection = 'scenario';
+                    return;
+                }
+
+                // Steps
+                if (currentSection && 
+                    (line.startsWith('Given ') || line.startsWith('When ') || 
+                     line.startsWith('Then ') || line.startsWith('And ') || 
+                     line.startsWith('But '))) {
+                    
+                    const step = {
+                        keyword: line.split(' ')[0],
+                        text: line.substring(line.indexOf(' ') + 1),
+                        lineNumber: index + 1
+                    };
+
+                    if (currentSection === 'background') {
+                        analysis.background.steps.push(step);
+                    } else if (currentScenario) {
+                        currentScenario.steps.push(step);
+                        extractStepSemantics(step, analysis);
+                    }
+                    return;
+                }
+
+                // Dependency comments
+                if (line.startsWith('#') && line.includes('requires')) {
+                    analysis.dependencies.push({
+                        type: 'explicit',
+                        text: line.trim(),
+                        lineNumber: index + 1
+                    });
+                }
+            });
+
+            analysis.artifacts = Array.from(analysis.artifacts);
+            return analysis;
+        }
+
+        function extractStepSemantics(step, analysis) {
+            const text = step.text.toLowerCase();
+            
+            // Detect API calls
+            if (text.includes('post') || text.includes('get') || 
+                text.includes('put') || text.includes('delete') ||
+                text.includes('request') || text.includes('sent to')) {
+                
+                const uriMatch = step.text.match(/["']([^"']*system\/[^"']*)["']/) ||
+                                step.text.match(/["']([^"']*\/\w+[^"']*)["']/);
+                
+                if (uriMatch) {
+                    analysis.apiCalls.push({
+                        method: extractHttpMethod(step.text),
+                        uri: uriMatch[1],
+                        stepLine: step.lineNumber,
+                        rawText: step.text
+                    });
+                }
+            }
+
+            // Detect UUID headers
+            if (text.includes('uuid') && text.includes('header')) {
+                const uuidMatch = step.text.match(/["']([a-f0-9\-]+)["']/i);
+                if (uuidMatch) {
+                    analysis.artifacts.add(`UUID: ${uuidMatch[1]}`);
+                }
+            }
+
+            // Detect request body files
+            if (text.includes('request body') && text.includes('contents of')) {
+                const fileMatch = step.text.match(/["']([^"']*\.(json|xml|txt))["']/);
+                if (fileMatch) {
+                    analysis.artifacts.add(`Request Body: ${fileMatch[1]}`);
+                }
+            }
+
+            // Detect response logging
+            if (text.includes('log') && text.includes('response')) {
+                analysis.artifacts.add('Response Logging');
+            }
+
+            // Detect database validations
+            if (text.includes('validate') && text.includes('db table')) {
+                analysis.dataValidations.push({
+                    type: 'database',
+                    stepLine: step.lineNumber,
+                    rawText: step.text
+                });
+            }
+
+            // Detect specific table validations
+            if (text.includes('adapter_context') || text.includes('ms_inbox_events')) {
+                const tableName = text.includes('adapter_context') ? 'adapter_context' : 'ms_inbox_events';
+                analysis.artifacts.add(`Database Table: ${tableName}`);
+            }
+
+            // Detect file references
+            if (text.includes('src/test/resources') || text.includes('.json')) {
+                const fileMatches = step.text.match(/["']([^"']*\.(json|xml|yml|yaml))["']/g) || [];
+                fileMatches.forEach(match => {
+                    const cleanMatch = match.replace(/["']/g, '');
+                    analysis.artifacts.add(`File: ${cleanMatch}`);
+                });
+            }
+        }
+
+        function extractHttpMethod(text) {
+            const upperText = text.toUpperCase();
+            if (upperText.includes('POST')) return 'POST';
+            if (upperText.includes('GET')) return 'GET';
+            if (upperText.includes('PUT')) return 'PUT';
+            if (upperText.includes('DELETE')) return 'DELETE';
+            if (upperText.includes('PATCH')) return 'PATCH';
+            return 'UNKNOWN';
+        }
+
+        function displayAnalysis(analysis) {
+            let html = `<h2>Analysis Results for: "${analysis.feature.name}"</h2>`;
+            
+            if (analysis.feature.description.length > 0) {
+                html += `<p><strong>Description:</strong> ${analysis.feature.description.join(' ')}</p>`;
+            }
+            
+            html += `<div class="section"><h3>Background (${analysis.background.steps.length} steps)</h3><ul>`;
+            analysis.background.steps.forEach(step => {
+                html += `<li><strong>${step.keyword}:</strong> ${step.text}</li>`;
+            });
+            html += `</ul></div>`;
+            
+            html += `<div class="section"><h3>Scenarios (${analysis.scenarios.length})</h3>`;
+            analysis.scenarios.forEach((scenario, idx) => {
+                html += `<div style="border: 1px solid #ddd; margin: 10px 0; padding: 15px; border-radius: 5px;">`;
+                html += `<h4>Scenario ${idx + 1}: ${scenario.name}</h4>`;
+                html += `<p><small>Line ${scenario.lineNumber}</small></p>`;
+                html += `<ul>`;
+                scenario.steps.forEach(step => {
+                    html += `<li><strong>${step.keyword}:</strong> ${step.text}</li>`;
+                });
+                html += `</ul></div>`;
+            });
+            html += `</div>`;
+            
+            if (analysis.apiCalls.length > 0) {
+                html += `<div class="section"><h3>API Calls Detected (${analysis.apiCalls.length})</h3><ul>`;
+                analysis.apiCalls.forEach(call => {
+                    html += `<li><strong>${call.method}:</strong> ${call.uri}<br>`;
+                    html += `<small>Line ${call.stepLine}: "${call.rawText}"</small></li>`;
+                });
+                html += `</ul></div>`;
+            }
+            
+            if (analysis.artifacts.size > 0) {
+                html += `<div class="section"><h3>Artifacts & References Detected</h3><ul>`;
+                analysis.artifacts.forEach(artifact => {
+                    html += `<li>${artifact}</li>`;
+                });
+                html += `</ul></div>`;
+            }
+            
+            if (analysis.dataValidations.length > 0) {
+                html += `<div class="section"><h3>Data Validations Detected (${analysis.dataValidations.length})</h3><ul>`;
+                analysis.dataValidations.forEach(val => {
+                    html += `<li><strong>Validation:</strong> ${val.rawText}<br>`;
+                    html += `<small>Line ${val.stepLine}</small></li>`;
+                });
+                html += `</ul></div>`;
+            }
+            
+            if (analysis.dependencies.length > 0) {
+                html += `<div class="section"><h3>Dependencies & Notes</h3><ul>`;
+                analysis.dependencies.forEach(dep => {
+                    html += `<li>${dep.text}</li>`;
+                });
+                html += `</ul></div>`;
+            }
+            
+            // Generate human-readable explanation
+            html += `<div class="section"><h3>Human-Readable Explanation</h3>`;
+            html += `<button class="btn" onclick="generateExplanation()">Generate Explanation</button>`;
+            html += `<pre id="explanation-output" style="background: #f8f9fa; padding: 15px; border-radius: 4px; overflow-x: auto;"></pre></div>`;
+            
+            document.getElementById('analysis-results').innerHTML = html;
+            document.getElementById('analysis-results').style.display = 'block';
+        }
+
+        function generateExplanation() {
+            const explanation = `Feature: 01_adapter_apitoapi validation
+
+  # =========================================================
+  # TEST DATA DEPENDENCIES
+  # This feature is self-contained. No prior feature execution required.
+  # It creates the following records used by other features:
+  #   - Template  : direct:ApiToApi  (POST /system/adapters/templates/direct:ApiToApi)
+  #   - Adapter   : generic.Routeid  (POST /system/adapters/generic.Routeid)
+  #
+  # INTERNAL DEPENDENCIES (scenario order matters):
+  #   Scenario 3 ("To invoke an API internally...") requires Scenario 1 and 2
+  #   to have created the template and adapter first.
+  # ============================================================
+
+Background:
+	Given Set the test backgound
+	And MS request header "Content-Type" is set to "application/json"
+	And MS request header "Authorization" is set to "jwt eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+	And MS request header "UUID" is set to "adapqi-da5244e-a140-470e-83ad-768cb225640"
+	And the MS request body is set to the contents of "src/test/resources/integration-cucumber-json-payload/usecasesjsonpayload/02_apitoapi/apitoapirequestpayload.json"
+	When a "POST" request is sent to MS
+	And log all MS response in console
+	Then MS response code should be 201
+
+Scenario: To create a template configuration persisting to API to API using HTTP POST METHOD
+	And MS request URI is "/system/adapters/templates/direct:ApiToApi"
+	And MS request header "UUID" is set to "adapqi-da5244e-a140-470e-83ad-768cb225640"
+	And the MS request body is set to the contents of "src/test/resources/test/resources/integration-cucumber-json-payload/usecasesjsonpayload/02_apitoapi/apitoapirequestpayload.json"
+	When a "POST" request is sent to MS
+	And log all MS response in console
+	Then MS response code should be 201
+
+Scenario: To create an adapter configuration persisting to API to API using HTTP POST METHOD
+	And MS request URI is "/system/adapters/generic.Routeid"
+	And MS request header "UUID" is set to "adapqi-da5244e-a140-470e-83ad-768cb225640"
+	And the MS request body is set to the contents of "src/test/resources/integration-cucumber-json-payload/usecasesjsonpayload/02_apitoapi/apitoapiadapterconflayoutpayload.json"
+	When a "POST" request is sent to MS
+	And log all MS response in console
+	Then MS response code should be 201
+
+Scenario: To validate Application Context Map while executing API to API use case
+	# Then Set the following data criteria
+	# | TestCaseID      | ColumnName | Operator | DataType | ColumnValue |
+	# | MS-UseCaseTest-Adapter-MS-002| key      | eq | string | c68dba2e-7fdc-46ab-9776-94e90cf3f6d5_invoices |
+	# | MS-UseCaseTest-Adapter-MS-002| namespace| eq | string | Codat |
+	#
+	# And Validate the below details from the db table adapter_context and check no of record is 1
+	#
+	# | TestCaseID | ColumnName | ColumnValue |
+	# | MS-UseCaseTest-Adapter-MS-002| value | 9 |
+	#
+	# Then Set the following data criteria
+	# | TestCaseID | ColumnName | Operator | DataType | ColumnValue |
+	# | MS-UseCaseTest-Adapter-MS-002| key      | eq | string | c68dba2e-7fdc-46ab-9776-94e90cf3f6d5_test |
+	# | MS-UseCaseTest-Adapter-MS-002| namespace| eq | string | Codat |
+	#
+	# And Validate the below details from the db table adapter_context and check no of record is 1
+	#
+	# | TestCaseID | ColumnName | ColumnValue |
+	# | MS-UseCaseTest-Adapter-MS-002| value  | 9 |
+
+Scenario: To validate API to API execution by checking status in ms_inbox_events table
+	
+	Then Set the following data criteria
+	  | TestCaseID                     | ColumnName | Operator | DataType | ColumnValue                                 |
+	  | MS-UseCaseTest-Adapter-MS-003 | eventId    | eq       | string   | adapqi-da5244e-a140-470e-83ad-768cb225640   |
+	  | MS-UseCaseTest-Adapter-MS-003 | eventType  | eq       | string   | ms-adapterservice.ApiToApi                 |
+	
+	  And Validate the below details from the db table ms_inbox_events and check no of record is 1
+	    | TestCaseID                     | ColumnName | ColumnValue |
+	    | MS-UseCaseTest-Adapter-MS-003 | status     | PROCESSED  |
+	    
+#InvalidInputException
+Scenario: To invoke an API internally using an Adapter API HTTP POST METHOD Y
+	And MS request URI is "system/apitoapijobs/ApiToApi"
+	And MS request header "UUID" is set to "adapqn-da5244e-a140-470e-83ad-768cb225640"
+	And the MS request body is set to the contents of "src/test/resources/integration-cucumber-json-payload/usecasesjsonpayload/02_apitoapi/apitoapirequestpayload_negative.json"
+	When a "POST" request is sent to MS
+	And log all MS response in console
+	Then MS response code should be 400
+
+#ExecuteeventAPIFailure
+Scenario: To invoke an API internally using an Adapter API HTTP POST METHOD 
+	And MS request URI is "system/apitoapijobs/ApiToApi"
+	And MS request header "UUID" is set to "adapqn-da5244e-a140-470e-83ad-768cb225640"
+	And MS request header "httpEndPoint" is set to "http://dummyip:3000/irf-provider-container/api/v1.0.0/order/paymentOrders/sepaInstantPayment"
+	And the MS request body is set to the contents of "src/test/resources/integration-cucumber-json-payload/usecasesjsonpayload/02_apitoapi/apitoapirequestpayload.json"
+	When a "POST" request is sent to MS
+	And log all MS response in console
+	Then MS response code should be 500`;
+
+            document.getElementById('explanation-output').textContent = explanation;
+        }
+    </script>
+</body>
+</html>

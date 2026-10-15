@@ -25,8 +25,18 @@ describe('app shell', () => {
     const html = mounted.host.innerHTML;
     expect(html).toContain('Use-case folder browser');
     const tabs = Array.from(mounted.host.querySelectorAll('[role="tab"]')).map((t) => t.textContent);
-    expect(tabs).toEqual(['Folder browser', 'Single review']);
+    expect(tabs).toEqual(['Folder browser', 'Single review', 'Feature Explorer']);
     expect(mounted.host.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('Folder browser');
+  });
+
+  it('switches to the feature-explorer mode', () => {
+    mounted = mount();
+    const featTab = Array.from(mounted.host.querySelectorAll('[role="tab"]'))
+      .find((t) => t.textContent === 'Feature Explorer') as HTMLButtonElement;
+    act(() => { featTab.click(); });
+    const html = mounted.host.innerHTML;
+    expect(html).toContain('Feature File Explorer');
+    expect(mounted.host.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('Feature Explorer');
   });
 
   it('switches to the single-review mode and keeps its import flow', () => {

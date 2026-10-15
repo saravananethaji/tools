@@ -11,6 +11,7 @@ import type { TemplateReference } from './model';
 function runtimeEntryParameter(review: ReviewModel) { return review.effectiveParameters.find((parameter) => parameter.name === 'process.routeId' || parameter.name === 'routeId' || parameter.name.endsWith('.routeId')); }
 import { Badge, Findings, OverflowTable, NodeTree, safeText } from './ui';
 import { Catalog } from './Catalog';
+import FeatureFileExplorer from './components/FeatureFileExplorer';
 function TemplateView({ review }: { review: ReviewModel }) {
   const entry = runtimeEntryParameter(review); const entryRoute = entry?.provisionalValue;
   return <div className="grid">
@@ -60,7 +61,7 @@ export function App() {
 const [findings, setFindings] = useState<Finding[]>([]); 
 const [active, setActive] = useState(0); 
 const [tab, setTab] = useState('adapter');
-const [view, setView] = useState<'catalog' | 'single'>('catalog');
+const [view, setView] = useState<'catalog' | 'single' | 'feature-explorer'>('catalog');
   const [registrationFile, setRegistrationFile] = useState<File | null>(null); const [templateFiles, setTemplateFilesState] = useState<File[]>([]); const [importStatus, setImportStatus] = useState('');
   const [preloadedRegistration, setPreloadedRegistration] = useState<RegistrationPreload | null>(null);
   const [reading, setReading] = useState(false);
@@ -128,9 +129,13 @@ const [view, setView] = useState<'catalog' | 'single'>('catalog');
   const modeSwitch = <nav className="tabs" role="tablist" aria-label="Application mode">
     <button role="tab" aria-selected={view === 'catalog'} className={view === 'catalog' ? 'active' : ''} onClick={() => setView('catalog')}>Folder browser</button>
     <button role="tab" aria-selected={view === 'single'} className={view === 'single' ? 'active' : ''} onClick={() => setView('single')}>Single review</button>
+    <button role="tab" aria-selected={view === 'feature-explorer'} className={view === 'feature-explorer' ? 'active' : ''} onClick={() => setView('feature-explorer')}>Feature Explorer</button>
   </nav>;
   if (view === 'catalog') {
     return <main><header><div><p className="eyebrow">ADAPTERMS / INSPECTOR</p><h1>Use-case folder browser</h1><p className="subtitle">Select a use-case folder. Files are read in this browser and never uploaded.</p></div>{modeSwitch}</header><section className="notice"><strong>Static only</strong><span>Cards summarise registration and file structure. Open a use case for the full review; runtime behavior remains Not verified.</span></section><section className="panel"><Catalog onOpenReviews={openFromCatalog}/></section></main>;
+  }
+  if (view === 'feature-explorer') {
+    return <main><header><div><p className="eyebrow">ADAPTERMS / INSPECTOR</p><h1>Feature File Explorer</h1><p className="subtitle">Analyze Gherkin/Cucumber .feature files — execution flow, API calls, artifacts, and validations.</p></div>{modeSwitch}</header><section className="panel"><FeatureFileExplorer /></section></main>;
   }
   return <main><header><div><p className="eyebrow">ADAPTERMS / INSPECTOR</p><h1>Adapter configuration review</h1><p className="subtitle">Read-only local inspection. No runtime execution, route loading, or endpoint calls.</p></div>{modeSwitch}</header><section className="notice"><strong>Static only</strong><span>Results describe JSON, XML, transformation, and Camel DSL structure. Runtime behavior remains Not verified.</span></section>{!review ? <section className="empty import-panel"><h2>Start a review</h2><p>The registration is read first so its template references drive the next step. Files remain on this device.</p><p className="muted">For the supplied EventToApi examples, use <code>eventtoapiadapterconfigpayload.json</code> as the registration and <code>eventtoapitemplateconfigpayload.json</code> as the template. Do not select <code>eventtoapieventpayload.json</code>; it is an event message, not a configuration artifact.</p>
       <div className="import-grid import-staged">

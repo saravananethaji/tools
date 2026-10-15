@@ -4,9 +4,29 @@ import { composeCatalog } from './folder';
 import { buildReview } from './review';
 import type { CatalogModel, Finding, FolderScan, ReviewModel, SourceArtifact } from './model';
 import { parseJson, parseTemplate } from './parser';
-import { Findings, OverflowTable } from './ui';
+import { Findings, OverflowTable, Badge } from './ui';
 
-// We'll also need to import the Css classes? We'll assume they are available via the existing CSS.
+// Helper to determine transformation engine from a template instance
+function getTransformationEngine(instance: any): string | null {
+  const transformParam = instance.inputParameters.find((param: any) => 
+    /(?:data\.)?(?:jolt|xslt)\.transform\.spec|data\.transform\.spec/i.test(param.name)
+  );
+  
+  if (!transformParam) return null;
+  
+  return transformParam.name.toLowerCase().includes('xslt') ? 'XSLT' : 'JOLT';
+}
+
+// Helper to get health badge props
+function getHealthBadgeProps(health: 'Healthy' | 'Warnings' | 'Errors' | 'Not verified'): { severity: Finding['severity']; label: string } {
+  switch (health) {
+    case 'Errors': return { severity: 'Invalid', label: 'Errors' };
+    case 'Warnings': return { severity: 'Warning', label: 'Warnings' };
+    case 'Not verified': return { severity: 'Not verified', label: 'Not verified' };
+    case 'Healthy': return { severity: 'Valid', label: 'Healthy' };
+    default: return { severity: 'Valid', label: 'Healthy' };
+  }
+}
 
 export function Catalog({ onOpenReviews }: {
   /** Hands the built reviews to the App so the existing 5-tab reviewer can render them. */
@@ -110,7 +130,6 @@ export function Catalog({ onOpenReviews }: {
   };
 
   // Render the catalog UI.
-
   return (
     <div>
       <h1>Folder Browser</h1>
@@ -140,92 +159,152 @@ export function Catalog({ onOpenReviews }: {
           <p>Number of use cases: {catalog.useCases.length}</p>
           <h3>Use Cases</h3>
           {catalog.useCases.map((useCase, index) => (
-            <div key={useCase.registrationPath} style={{ border: '1px solid #ccc', margin: '10px', padding: '10px' }}>
-              <h3>{useCase.registration.name} ({useCase.registration.type})</h3>
-              <p>Status: {useCase.registration.status}</p>
-              <h4>Stages</h4>
-              <OverflowTable>
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Entry Type</th>
-                      <th>Entry ID</th>
-                      <th>Template File</th>
-                      <th>Matched</th>
-                      <th>Process Reference</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {useCase.stages.map((stage, stageIndex) => (
-                      <tr key={stageIndex}>
-                        <td>{stage.entryType}</td>
-                        <td>{stage.entryId}</td>
-                        <td>{stage.templateFilePath ?? 'None'}</td>
-                        <td>{stage.matched ? 'Yes' : 'No'}</td>
-                        <td>{stage.processReference}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </OverflowTable>
-              <h4>Missing</h4>
-              <ul>
-                {useCase.missing.map((m, idx) => (
-                  <li key={idx}>{m.id} ({m.type})</li>
-                ))}
-              </ul>
-              <h4>Extra</h4>
-              <ul>
-                {useCase.extra.map((e, idx) => (
-                  <li key={idx}>{e}</li>
-                ))}
-              </ul>
-              <h4>Duplicates</h4>
-              <ul>
-                {useCase.duplicates.map((d, idx) => (
-                  <li key={idx}>{d}</li>
-                ))}
-              </ul>
-              <h4>Health</h4>
-              <p>{useCase.health}</p>
-              <h4>Finding Groups</h4>
-              <OverflowTable>
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Finding ID</th>
-                      <th>Severity</th>
-                      <th>Count</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {useCase.findingGroups.map((fg, idx) => (
-                      <tr key={idx}>
-                        <td>{fg.id}</td>
-                        <td>{fg.severity}</td>
-                        <td>{fg.count}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </OverflowTable>
-              <button
-                className="load-button primary"
-                onClick={() => handleOpenReview(useCase.registrationPath)}
-                aria-label={`Open full review for ${useCase.registration.name}`}
-              >
-                {openedPath === useCase.registrationPath ? 'Opened in reviewer →' : 'Open full review →'}
-              </button>
+            <div key={useCase.registrationPath} className="catalog-card">
+              <div className="card-header">
+                <div>
+                  <h2>{useCase.registration.name}</h2>
+                  <div className="registration-type">{useCase.registration.type}</div>
+                </div>
+                <div className="health-chip-container">
+                  <Badge severity={getHealthBadgeProps(useCase.health).severity} />
+                  <span>{getHealthBadgeProps(useCase.health).label}</span>
+                </div>
+              </div>
+              
+              <div className="card-body">
+                <div className="card-status">
+                  <p>Status: <strong>{useCase.registration.status}</strong></p>
+                  <p>Stages: {useCase.stages.length}</p>
+                </div>
+                
+                <div className="stage-section">
+                  <h3>Stages</h3>
+                  <OverflowTable>
+                    <table className="stage-table">
+                      <thead>
+                        <tr>
+                          <th>Entry Type</th>
+                          <th>Entry ID</th>
+                          <th>Template File</th>
+                          <th>Matched</th>
+                          <th>Process Reference</th>
+                          <th>Transform Engine</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {useCase.stages.map((stage, stageIndex) => {
+                          // Find the matching template instance to determine transformation engine
+                          const matchingInstance = useCase.registration.templates.find(
+                            (inst: any) => inst.id === stage.entryId && inst.type === stage.entryType
+                          );
+                          const transformEngine = matchingInstance ? getTransformationEngine(matchingInstance) : null;
+                          
+                          return (
+                            <tr key={stageIndex} className={`template-ref ${stage.matched ? 'ok' : 'broken'}`}>
+                              <td>{stage.entryType}</td>
+                              <td>{stage.entryId}</td>
+                              <td>
+                                {stage.templateFilePath ? (
+                                  <code className="ref-file">{stage.templateFilePath}</code>
+                                ) : (
+                                  <span className="ref-state broken">None</span>
+                                )}
+                              </td>
+                              <td>{stage.matched ? 'Yes' : 'No'}</td>
+                              <td>{stage.processReference}</td>
+                              <td>
+                                {transformEngine ? `${transformEngine} transform` : '—'}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </OverflowTable>
+                </div>
+                
+                {useCase.missing.length > 0 && (
+                  <div className="missing-section">
+                    <h3>Missing</h3>
+                    <ul className="missing-list">
+                      {useCase.missing.map((m, idx) => (
+                        <li key={idx}>
+                          <code>{m.id}</code> (<span className="muted">{m.type}</span>)
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                
+                {useCase.extra.length > 0 && (
+                  <div className="extra-section">
+                    <h3>Extra</h3>
+                    <ul className="extra-list">
+                      {useCase.extra.map((e, idx) => (
+                        <li key={idx}><code>{e}</code></li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                
+                {useCase.duplicates.length > 0 && (
+                  <div className="duplicates-section">
+                    <h3>Duplicates</h3>
+                    <ul className="duplicates-list">
+                      {useCase.duplicates.map((d, idx) => (
+                        <li key={idx}><code>{d}</code></li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                
+                <div className="finding-section">
+                  <h3>Finding Groups</h3>
+                  <OverflowTable>
+                    <table className="finding-table">
+                      <thead>
+                        <tr>
+                          <th>Finding ID</th>
+                          <th>Severity</th>
+                          <th>Count</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {useCase.findingGroups.map((fg, idx) => (
+                          <tr key={idx}>
+                            <td>{fg.id}</td>
+                            <td>
+                              <Badge severity={fg.severity} />
+                            </td>
+                            <td>{fg.count}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </OverflowTable>
+                </div>
+                
+                <div className="card-actions">
+                  <button
+                    className="load-button primary"
+                    onClick={() => handleOpenReview(useCase.registrationPath)}
+                    aria-label={`Open full review for ${useCase.registration.name}`}
+                  >
+                    {openedPath === useCase.registrationPath ? 'Opened in reviewer →' : 'Open full review →'}
+                  </button>
+                </div>
+              </div>
             </div>
           ))}
           <h3>Side Items</h3>
-          <ul>
+          <div className="side-items-container">
             {catalog.sideItems.map((item, idx) => (
-              <li key={idx}>
-                {item.relativePath} - {item.kind}
-              </li>
+              <div key={idx} className="side-item">
+                <span className="side-item-path">{item.relativePath}</span>
+                <span className="side-item-kind">({item.kind})</span>
+              </div>
             ))}
-          </ul>
+          </div>
         </div>
       )}
     </div>
