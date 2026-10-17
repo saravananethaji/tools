@@ -1,4 +1,5 @@
 import type { AdapterRegistration, DecodedTemplate, EffectiveParameter, ExpressionReference, Finding, ParameterDeclaration, ParameterValue, RouteSummary, TemplateDefinition, TemplateInstance, XmlNode } from './model';
+import { redactSecrets, containsSensitiveContent } from './safety';
 
 export const MAX_FILE_BYTES = 2_000_000;
 export const CAMEL_STATIC_RULESET = 'camel-spring-static-v1';
@@ -7,6 +8,11 @@ const knownTemplateKeys = new Set(['id', 'name', 'type', 'inputParameters', 'def
 const knownRegistrationKeys = new Set(['type', 'name', 'status', 'templates', 'parameters']);
 const supportedRouteChildren = new Set(['from', 'log', 'choice', 'setHeader', 'setProperty', 'to', 'toD', 'process', 'bean', 'stop', 'marshal', 'unmarshal']);
 const supportedContextChildren = new Set(['route', 'onException', 'onCompletion', 'errorHandler']);
+
+// Framework-provided expressions that are always available in Camel and must never be
+// reported as undeclared Exchange properties. Only exchangeProperty.<parameterName> is
+// compared against template declarations; everything here is an allow-listed root.
+const FRAMEWORK_EXPRESSION_ROOTS = new Set(['exchange', 'exception', 'body', 'header']);
 
 const finding = (id: string, severity: Finding['severity'], category: string, artifact: string, message: string, location?: string): Finding => ({ id, severity, category, artifact, message, location });
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -72,7 +78,6 @@ export function parseRegistration(value: unknown): { registration?: AdapterRegis
   return { registration: { type: value.type, name: value.name, status: value.status, templates, parameters: isObject(value.parameters) ? value.parameters : {}, raw: value, unknownFields: getUnknown(value, knownRegistrationKeys) }, findings };
 }
 
-function redactSecrets(xml: string): string { return xml.replace(/(\b(?:password|keyPassword|secret|token)\s*=\s*["'])[^"']*(["'])/gi, '$1[REDACTED]$2'); }
 function nodeLocation(element: Element): string { return `<${element.localName || element.nodeName}${element.getAttribute('id') ? ` id="${element.getAttribute('id')}"` : ''}>`; }
 function toTree(element: Element): XmlNode { return { name: element.localName || element.nodeName, attributes: Object.fromEntries(Array.from(element.attributes).map((attribute) => [attribute.name, attribute.value])), text: Array.from(element.childNodes).filter((node) => node.nodeType === Node.TEXT_NODE).map((node) => node.textContent?.trim() ?? '').filter(Boolean).join(' ') || undefined, location: nodeLocation(element), children: Array.from(element.children).map(toTree) }; }
 
@@ -130,7 +135,7 @@ export function decodeTemplate(template: TemplateDefinition): { decoded?: Decode
     return id ? `Local bean ${id} (class not specified)` : '(anonymous bean)';
   })));
   const endpoints = Array.from(document.querySelectorAll('[uri]')).map((node) => node.getAttribute('uri')!).filter(Boolean);
-  const securityFindings = /\b(?:password|keyPassword|secret|token)\s*=\s*["']/i.test(decoded.text) ? [finding('INLINE_SECRET', 'Warning', 'Security', 'template', 'Potential inline credential detected; rendered values are redacted.', '$.xmlRoute')] : [];
+  const securityFindings = containsSensitiveContent(decoded.text) ? [finding('INLINE_SECRET', 'Warning', 'Security', 'template', 'Potential inline credential detected; rendered values are redacted.', '$.xmlRoute')] : [];
   findings.push(...securityFindings, finding('DSL_RULESET', 'Not verified', 'Camel DSL', 'template', `Static checks use ${CAMEL_STATIC_RULESET}; the deployed Camel schema version is not verified.`));
   return { decoded: { xml: decoded.text, safeXml: redactSecrets(decoded.text), document, routes, imports, beans, endpoints, references: expressionReferences(document), securityFindings }, findings };
 }

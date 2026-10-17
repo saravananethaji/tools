@@ -12,12 +12,92 @@ function runtimeEntryParameter(review: ReviewModel) { return review.effectivePar
 import { Badge, Findings, OverflowTable, NodeTree, safeText } from './ui';
 import { Catalog } from './Catalog';
 import FeatureFileExplorer from './components/FeatureFileExplorer';
+function RouteBehaviorPanel({
+  onExceptions,
+  setHeaders,
+  setProperties,
+  endpoints,
+}: {
+  onExceptions: Element[];
+  setHeaders: Element[];
+  setProperties: Element[];
+  endpoints: string[];
+}) {
+  return (
+    <section className="panel wide">
+      <h2>Route behavior &amp; policies</h2>
+      <p className="muted">
+        Static summary of error policies, headers/properties written, and endpoints declared in this template.
+      </p>
+      <div className="policy-summary">
+        {onExceptions.length ? (
+          <>
+            <h3>Error policies</h3>
+            <ul>
+              {onExceptions.map((oe, index) => (
+                <li key={index}>
+                  <code>{oe.getAttribute('id') || '(unnamed)'}</code>
+                  {oe.children.length ? (
+                    <span>
+                      ·{' '}
+                      {Array.from(oe.children).map((child) => child.localName).join(', ')}
+                    </span>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          </>
+        ) : (
+          <p className="muted">
+            No <code>onException</code> error policies declared.
+          </p>
+        )}
+        {setHeaders.length || setProperties.length ? (
+          <>
+            <h3>Headers &amp; properties written</h3>
+            <ul>
+              {setHeaders.map((sh, index) => (
+                <li key={`h-${index}`}>
+                  Header <code>{sh.getAttribute('name')}</code>
+                </li>
+              ))}
+              {setProperties.map((sp, index) => (
+                <li key={`p-${index}`}>
+                  Property <code>{sp.getAttribute('name')}</code>
+                </li>
+              ))}
+            </ul>
+          </>
+        ) : (
+          <p className="muted">
+            No headers or exchange properties written.
+          </p>
+        )}
+        {endpoints.length ? (
+          <>
+            <h3>Endpoints</h3>
+            <ul>
+              {endpoints.map((uri, index) => (
+                <li key={index}>
+                  <code>{safeText(uri)}</code>
+                </li>
+              ))}
+            </ul>
+          </>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
 function TemplateView({ review }: { review: ReviewModel }) {
   const entry = runtimeEntryParameter(review); const entryRoute = entry?.provisionalValue;
+  const onExceptions = Array.from(review.decoded.document.querySelectorAll('onException')); const setHeaders = Array.from(review.decoded.document.querySelectorAll('setHeader')); const setProperties = Array.from(review.decoded.document.querySelectorAll('setProperty')); const endpoints = Array.from(review.decoded.document.querySelectorAll('[uri]')).map((node) => node.getAttribute('uri')).filter((u): u is string => u !== null);
   return <div className="grid">
     <section className="panel hero"><p className="eyebrow">XML TEMPLATE VIEW · READ ONLY</p><h2>{review.template.name}</h2><p className="muted"><code>{review.template.id}</code> · {review.template.type}</p><p className="runtime-entry-summary"><strong>Runtime entry point</strong><code>{entryRoute || 'Not configured'}</code><span>{entry ? `Mapped from ${entry.name}` : 'No route-ID parameter was found in the adapter configuration.'}</span></p></section>
     <section className="panel"><h2>Dependencies & security</h2><h3>Imports</h3>{review.decoded.imports.map((item) => <code className="block" key={item}>{safeText(item)}</code>)}<h3>Beans / references</h3>{review.decoded.beans.map((item, index) => <code className="block" key={`${item}-${index}`}>{item || '(anonymous)'}</code>)}<h3>Security</h3>{review.decoded.securityFindings.length ? review.decoded.securityFindings.map((item) => <p className="warning" key={item.id}>⚠ {item.message}</p>) : <p className="muted">No static secret pattern found.</p>}</section>
     <section className="panel wide"><h2>Route flow</h2>{review.decoded.routes.map((route, index) => { const isEntry = !!entryRoute && (route.id === entryRoute || route.from === entryRoute); return <article className={`route ${isEntry ? 'runtime-entry-route' : ''}`} key={`${route.id}-${index}`}><strong>{route.id || '(unnamed route)'}{isEntry ? <span className="entry-badge">Runtime entry point</span> : null}</strong><span>from {route.from || 'missing'}{isEntry ? ' · matches adapter process.routeId' : ''}</span><ul className="tree"><NodeTree node={route.tree}/></ul></article>; })}</section>
+    <RouteBehaviorPanel onExceptions={onExceptions} setHeaders={setHeaders} setProperties={setProperties} endpoints={endpoints} />
     <section className="panel wide"><h2>Camel expression references</h2><p className="muted">Static route references only; this does not prove runtime execution.</p><OverflowTable><table><thead><tr><th>Expression</th><th>Source type</th><th>Route</th><th>Camel step</th><th>Purpose</th></tr></thead><tbody>{review.decoded.references.map((ref, index) => <tr key={`${ref.location}-${index}`}><td><code>{'${'}{ref.expression}{'}'}</code></td><td>{ref.kind}{ref.name ? <code>{ref.name}</code> : null}</td><td>{ref.routeId || 'Outside a route'}</td><td><code>{ref.step}</code></td><td>{ref.purpose}</td></tr>)}</tbody></table></OverflowTable></section>
     <section className="panel wide"><h2>Decoded Camel XML (sensitive values redacted)</h2><p className="muted">Click a tag to minimise or expand its matching XML element. The runtime entry route starts expanded.</p><XmlViewer document={review.decoded.document} entryRoute={entryRoute}/></section>
   </div>;
@@ -39,8 +119,16 @@ function TemplateRefPanel({ review }: { review: ReviewModel }) {
       ))}</tbody></table></OverflowTable>
   </section>;
 }
-function AdapterView({ review }: { review: ReviewModel }) { const transformSummary = review.transformEngine ? `${review.transformEngine} transformation` : 'Transformation not detected'; const entry = runtimeEntryParameter(review); return <div className="grid"><section className="panel hero"><p className="eyebrow">ADAPTER CONFIGURATION VIEW · RUNTIME ENTRY POINT</p><h2><code>{entry?.provisionalValue || 'Not configured'}</code></h2><p>This is the route the adapter invokes when the template starts.</p><p className="muted">Configured by <code>{entry?.name || 'No route-ID parameter found'}</code> · status <strong>{review.registration.status}</strong></p><p>Adapter: {review.registration.name}<br/>Matched template: <code>{review.instance.id}</code> / {review.instance.type}</p></section><TemplateRefPanel review={review}/><section className="panel wide"><h2>Effective configuration</h2><p className="muted">Precedence is displayed provisionally: supplied → registration default → template default. Runtime precedence is not verified.</p><OverflowTable><table><thead><tr><th>Meaning / parameter</th><th>Supplied</th><th>Registration default</th><th>Template default</th><th>Provisional value</th><th>XML use</th><th>State</th></tr></thead><tbody>{review.effectiveParameters.map((parameter) => <tr key={parameter.name}><td><strong>{parameter.declaration?.helpText || parameter.name}</strong><code>{parameter.name}</code></td><td>{parameter.suppliedValue && parameter.name.includes('transform') ? transformSummary : parameter.suppliedValue || '—'}</td><td>{parameter.registrationDefault || '—'}</td><td>{parameter.templateDefault || '—'}</td><td>{parameter.provisionalValue && parameter.name.includes('transform') ? transformSummary : parameter.provisionalValue || 'Missing'}</td><td>{parameter.xmlReferences.length ? parameter.xmlReferences.map((ref) => ref.location).join(', ') : 'Not found'}</td><td>{parameter.state}</td></tr>)}</tbody></table></OverflowTable></section><section className="panel"><h2>Transformation</h2><p><Badge severity={review.transformSpec ? 'Valid' : 'Not verified'}/> {transformSummary}</p><pre className="code small">{review.transformSpec ? typeof review.transformSpec === 'string' ? safeText(review.transformSpec) : JSON.stringify(review.transformSpec, null, 2) : 'No decoded transformation is available.'}</pre></section><section className="panel"><h2>Target API</h2><dl>{['httpRequestType', 'https.config', 'httpEndPoint'].map((name) => { const parameter = review.effectiveParameters.find((item) => item.name === name); return <React.Fragment key={name}><dt>{name}</dt><dd>{parameter?.provisionalValue || 'Not supplied'}</dd></React.Fragment>; })}</dl></section><section className="panel wide"><h2>Unmanaged fields</h2><p>Registration: {Object.keys(review.registration.unknownFields).join(', ') || 'none'} · Template: {Object.keys(review.template.unknownFields).join(', ') || 'none'}</p></section></div>; }
-function RelationshipView({ review }: { review: ReviewModel }) { return <section className="panel"><h2>Adapter → template → route relationship</h2><OverflowTable><table><thead><tr><th>Adapter value</th><th>Template declaration</th><th>XML location</th><th>Static result</th></tr></thead><tbody>{review.effectiveParameters.map((parameter) => <tr key={parameter.name}><td>{parameter.provisionalValue && parameter.name.includes('transform') ? `${review.transformEngine ?? 'Unknown'} transformation` : parameter.provisionalValue || 'Missing'}<code>{parameter.name}</code></td><td>{parameter.declaration ? parameter.declaration.helpText || 'Declared' : 'Missing declaration'}</td><td>{parameter.xmlReferences.length ? parameter.xmlReferences.map((ref) => ref.location).join(', ') : 'Not statically referenced'}</td><td>{parameter.state}{parameter.xmlReferences.length ? ' → consumed by Exchange property' : ''}</td></tr>)}</tbody></table></OverflowTable></section>; }
+function AdapterView({ review }: { review: ReviewModel }) { const transformSummary = review.transformEngine ? `${review.transformEngine} transformation` : 'Transformation not detected'; const entry = runtimeEntryParameter(review); return <div className="grid"><section className="panel hero"><p className="eyebrow">ADAPTER CONFIGURATION VIEW · RUNTIME ENTRY POINT</p><h2><code>{entry?.provisionalValue || 'Not configured'}</code></h2><p>This is the route the adapter invokes when the template starts.</p><p className="muted">Configured by <code>{entry?.name || 'No route-ID parameter found'}</code> · status <strong>{review.registration.status}</strong></p><p>Adapter: {review.registration.name}<br/>Matched template: <code>{review.instance.id}</code> / {review.instance.type}</p></section><TemplateRefPanel review={review}/><section className="panel wide"><h2>Effective configuration</h2><p className="muted">Sources are shown separately; the final effective value is <strong>Not verified</strong> because runtime parameter precedence is not confirmed.</p><OverflowTable><table><thead><tr><th>Meaning / parameter</th><th>Declaration</th><th>Template default</th><th>Registration default</th><th>Supplied</th><th>Effective value</th><th>XML use</th><th>State</th></tr></thead><tbody>{review.effectiveParameters.map((parameter) => <tr key={parameter.name}><td><strong>{parameter.declaration?.helpText || parameter.name}</strong><code>{parameter.name}</code></td><td>{parameter.declaration ? 'Declared' : 'Missing declaration'}</td><td>{parameter.templateDefault || '—'}</td><td>{parameter.registrationDefault || '—'}</td><td>{parameter.suppliedValue && parameter.name.includes('transform') ? transformSummary : parameter.suppliedValue || '—'}</td><td><Badge severity="Not verified"/></td><td>{parameter.xmlReferences.length ? parameter.xmlReferences.map((ref) => ref.location).join(', ') : 'Not found'}</td><td>{parameter.state}</td></tr>)}</tbody></table></OverflowTable></section><section className="panel"><h2>Transformation</h2><p><Badge severity={review.transformSpec ? 'Valid' : 'Not verified'}/> {transformSummary}</p><pre className="code small">{review.transformSpec ? typeof review.transformSpec === 'string' ? safeText(review.transformSpec) : JSON.stringify(review.transformSpec, null, 2) : 'No decoded transformation is available.'}</pre></section><section className="panel"><h2>Target API</h2><dl>{['httpRequestType', 'https.config', 'httpEndPoint'].map((name) => { const parameter = review.effectiveParameters.find((item) => item.name === name); return <React.Fragment key={name}><dt>{name}</dt><dd>{parameter?.provisionalValue || 'Not supplied'}</dd></React.Fragment>; })}</dl></section><section className="panel wide"><h2>Unmanaged fields</h2><p>Registration: {Object.keys(review.registration.unknownFields).join(', ') || 'none'} · Template: {Object.keys(review.template.unknownFields).join(', ') || 'none'}</p></section></div>; }
+function RelationshipView({ review }: { review: ReviewModel }) {
+  const transformSummary = review.transformEngine ? `${review.transformEngine} transformation` : 'Transformation not detected';
+  const relationshipState = (parameter: { xmlReferences: { length: number }; suppliedValue?: string; registrationDefault?: string; templateDefault?: string; declaration?: { helpText?: string } }): string => {
+    if (!parameter.declaration) return 'Missing declaration';
+    if (!parameter.suppliedValue && !parameter.registrationDefault && !parameter.templateDefault) return 'Missing value';
+    if (parameter.suppliedValue) return parameter.xmlReferences.length ? 'Matched' : 'Declared but unused';
+    return 'Defaulted';
+  };
+  return <section className="panel"><h2>Adapter → template → route relationship</h2><p className="muted">For each parameter: adapter value → template declaration → XML expression/location → static route behavior.</p><OverflowTable><table><thead><tr><th>Adapter value</th><th>Template declaration</th><th>XML expression / location</th><th>Static route behavior</th><th>Result state</th></tr></thead><tbody>{review.effectiveParameters.map((parameter) => <tr key={parameter.name}><td>{parameter.name.includes('transform') ? transformSummary : parameter.suppliedValue || parameter.registrationDefault || parameter.templateDefault || 'Missing'}<code>{parameter.name}</code></td><td>{parameter.declaration ? parameter.declaration.helpText || 'Declared' : 'Missing declaration'}</td><td>{parameter.xmlReferences.length ? parameter.xmlReferences.map((ref) => `${ref.expression} @ ${ref.step}`).join(', ') : 'Not statically referenced'}</td><td>{parameter.xmlReferences.length ? parameter.xmlReferences.map((ref) => ref.purpose).join('; ') : 'No static route behavior'}</td><td><span className={`state-${relationshipState(parameter).replace(/\s+/g, '-').toLowerCase()}`}>{relationshipState(parameter)}</span></td></tr>)}</tbody></table></OverflowTable></section>; }
 function RawView({ review }: { review: ReviewModel }) {
   const xmlDecoded = review.decoded?.safeXml ?? null;
   return <div className="grid"><section className="panel wide"><h2>Loaded registration JSON (sensitive values redacted)</h2><pre className="code">{safeText(review.registrationSource.rawText)}</pre></section><section className="panel wide"><h2>Loaded template JSON (sensitive values redacted)</h2><pre className="code raw-collapsed">{safeText(review.templateSource.rawText)}</pre>{xmlDecoded ? <details className="decoded-detail"><summary>Decoded xmlRoute (Base64 decoded, secrets redacted)</summary><pre className="code">{xmlDecoded}</pre></details> : null}</section></div>;

@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react';
 import { strictBase64Decode } from './parser';
+import { redactSecrets } from './safety';
 import type { Finding, ReviewModel, XmlNode } from './model';
 
 const SEVERITY_ICON: Record<Finding['severity'], string> = { 'Valid': '✓', 'Invalid': '✕', 'Warning': '⚠', 'Not verified': '?' };
@@ -15,7 +16,7 @@ export function Findings({ findings }: { findings: Finding[] }) {
     </> : <p className="muted">No static findings.</p>}
   </section>;
 }
-export function safeText(value: string): string { return value.replace(/(\b(?:password|keyPassword|secret|token)\s*[=:]\s*["']?)[^"'\s,<]+/gi, '$1[REDACTED]'); }
+export function safeText(value: string): string { return redactSecrets(value); }
 function decodedValueOf(raw: Record<string, unknown>, key: string): string | null {
   const value = raw[key];
   if (typeof value !== 'string' || value.length < 64) return null;

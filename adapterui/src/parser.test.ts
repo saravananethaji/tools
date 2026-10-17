@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { decodeTemplate, decodeTransformation, effectiveParameters, parseJson, parseRegistration, parseTemplate, processReferenceFor, routeIdMatches, strictBase64Decode, validateCrossArtifact } from './parser';
+import { buildReview } from './review';
+import type { SourceArtifact } from './model';
 
 const xml = '<beans xmlns="http://www.springframework.org/schema/beans" xmlns:camel="http://camel.apache.org/schema/spring" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="x"><camelContext xmlns="http://camel.apache.org/schema/spring"><route id="r"><from uri="direct:start"/><choice><when><simple>${exchangeProperty.httpEndPoint} != ""</simple><to uri="http://example.test"/></when></choice></route></camelContext></beans>';
 const templateInput = { id: 'direct:test', name: 'Test', type: 'PROCESS', inputParameters: [{ name: 'httpEndPoint', helpText: 'Endpoint', isMandatory: 'true' }], defaultParameters: [{ name: 'timeout', value: '10' }], xmlRoute: btoa(xml) };
@@ -113,5 +115,90 @@ describe('static review parser', () => {
     expect(decodeTransformation({ ...instance, inputParameters: [{ name: 'xslt.transform.spec', value: btoa('<!DOCTYPE x [<!ENTITY e SYSTEM "file:///x">]><xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform"/>'), raw: {} }] }).findings[0].id).toBe('XSLT_EXTERNAL');
     expect(decodeTransformation({ ...instance, inputParameters: [{ name: 'data.transform.spec', value: btoa('{bad'), raw: {} }] }).findings[0].id).toBe('JOLT_INVALID');
     expect(decodeTransformation({ ...instance, inputParameters: [] }).findings[0].id).toBe('TRANSFORM_MISSING');
+  });
+  it('redacts a broad set of secret patterns in rendered XML without revealing values', () => {
+    const xml = '<beans xmlns="http://www.springframework.org/schema/beans" xmlns:camel="http://camel.apache.org/schema/spring" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="x"><camelContext xmlns="http://camel.apache.org/schema/spring"><route id="r"><from uri="direct:start"/><to uri="https://alice:s3cr3t@example.com/path"/><password>hunter2</password><token>abc123</token></route></camelContext></beans>';
+    const decoded = decodeTemplate({ ...template(), xmlRoute: btoa(xml) }).decoded!;
+    expect(decoded.safeXml).not.toContain('s3cr3t');
+    expect(decoded.safeXml).not.toContain('hunter2');
+    expect(decoded.safeXml).not.toContain('abc123');
+    expect(decoded.safeXml).toContain('[REDACTED]');
+    // Raw decoded XML is preserved internally; only rendered output is redacted.
+    expect(decoded.xml).toContain('s3cr3t');
+    expect(decoded.xml).toContain('hunter2');
+    expect(decoded.securityFindings.some((item) => item.id === 'INLINE_SECRET')).toBe(true);
+  });
+  it('redacts secret attributes such as apiKey/privateKey/password', () => {
+    const xml = '<beans xmlns="http://www.springframework.org/schema/beans" xmlns:camel="http://camel.apache.org/schema/spring"><camelContext xmlns="http://camel.apache.org/schema/spring"><route id="r"><from uri="direct:start"/><endpoint password="hunter2" apiKey="abc-123" privateKey="pk-secret"/></route></camelContext></beans>';
+    const decoded = decodeTemplate({ ...template(), xmlRoute: btoa(xml) }).decoded!;
+    expect(decoded.safeXml).not.toContain('hunter2');
+    expect(decoded.safeXml).not.toContain('abc-123');
+    expect(decoded.safeXml).not.toContain('pk-secret');
+    expect(decoded.safeXml).toContain('password="[REDACTED]"');
+    expect(decoded.safeXml).toContain('apiKey="[REDACTED]"');
+    expect(decoded.safeXml).toContain('privateKey="[REDACTED]"');
+  });
+  it('does not raise INLINE_SECRET when no secret pattern is present', () => {
+    const xml = '<beans xmlns="http://www.springframework.org/schema/beans" xmlns:camel="http://camel.apache.org/schema/spring"><camelContext xmlns="http://camel.apache.org/schema/spring"><route id="r"><from uri="direct:start"/><to uri="direct:result"/></route></camelContext></beans>';
+    const decoded = decodeTemplate({ ...template(), xmlRoute: btoa(xml) }).decoded!;
+    expect(decoded.securityFindings.some((item) => item.id === 'INLINE_SECRET')).toBe(false);
+  });
+  it('never flags framework-provided expressions (exchange/exception/body) as undeclared', () => {
+    const source = '<beans xmlns="http://www.springframework.org/schema/beans" xmlns:camel="http://camel.apache.org/schema/spring"><camelContext xmlns="http://camel.apache.org/schema/spring"><route id="r"><from uri="direct:start"/><simple>${exchange}</simple><simple>${exception.message}</simple><setBody><simple>${body}</simple></setBody></route></camelContext></beans>';
+    const parsedTemplate = parseTemplate({ ...templateInput, xmlRoute: btoa(source) }).template!;
+    const decoded = decodeTemplate(parsedTemplate).decoded!;
+    const instance = registration().templates[0];
+    const parameters = effectiveParameters(parsedTemplate, instance, decoded);
+    const ids = validateCrossArtifact(parsedTemplate, instance, decoded, parameters).map((item) => item.id);
+    expect(decoded.references.some((ref) => ref.kind === 'exchange')).toBe(true);
+    expect(decoded.references.some((ref) => ref.kind === 'exception')).toBe(true);
+    expect(decoded.references.some((ref) => ref.kind === 'body')).toBe(true);
+    expect(ids).not.toContain('XML_REF_UNDECLARED');
+  });
+  it('reviews the supplied EventToApi files end to end: parses, decodes, redacts secrets, reports them', () => {
+    const secretXml = '<beans xmlns="http://www.springframework.org/schema/beans" xmlns:camel="http://camel.apache.org/schema/spring"><camelContext xmlns="http://camel.apache.org/schema/spring"><onException><exception>org.apache.camel.http.base.HttpOperationFailedException</exception><onWhen><simple>${exception?.httpResponseCode} >= 500</simple><to uri="dead:error"/></onWhen></onException><route id="direct:eventtoapi.json.process"><from uri="direct:start"/><to uri="https://example.test" keyPassword="Temenos123"/><choice><when><simple>${exchangeProperty.httpEndPoint} != ""</simple><to uri="http://example.test"/></when></choice></route></camelContext></beans>';
+    const joltB64 = btoa('[{"operation":"shift","spec":{"debitAccountIBAN":"body.debitAccountIBAN","paymentCurrencyId":"body.paymentCurrencyId","amount":"body.amount","beneficiaryIBAN":"body.beneficiaryIBAN"}}]');
+    const reg = parseRegistration({
+      type: 'EVENTTOAPI', name: 'SEPA PAYMENT EVENT TO REST API CALL', status: 'START',
+      templates: [{
+        id: 'direct:eventtoapi.json.process', type: 'PROCESS',
+        inputParameters: [
+          { name: 'process.routeId', value: 'direct:eventtoapi.json.process', raw: {} },
+          { name: 'httpRequestType', value: 'POST', raw: {} },
+          { name: 'https.config', value: 'false', raw: {} },
+          { name: 'httpEndPoint', value: 'http://mockip:3000/order/paymentOrders/sepaInstantPayment', raw: {} },
+          { name: 'data.transform.spec', value: joltB64, raw: {} }
+        ],
+        defaultParameters: [], raw: {}, unknownFields: {}
+      }],
+      parameters: {}, raw: {}, unknownFields: {}
+    }).registration!;
+    const tmpl = parseTemplate({
+      id: 'direct:eventtoapi.json.process', name: 'Process template for Event to API', type: 'PROCESS',
+      inputParameters: [
+        { name: 'process.routeId', helpText: 'entry route id', isMandatory: true, raw: {} },
+        { name: 'httpRequestType', helpText: 'HTTP method', isMandatory: true, raw: {} },
+        { name: 'https.config', helpText: 'SSL/TLS switch', isMandatory: true, raw: {} },
+        { name: 'httpEndPoint', helpText: 'HTTP endpoint URL', isMandatory: true, raw: {} },
+        { name: 'data.transform.spec', helpText: 'JOLT/XSLT spec (BASE64)', isMandatory: true, raw: {} }
+      ],
+      defaultParameters: [], xmlRoute: btoa(secretXml), raw: {}, unknownFields: {}
+    }).template!;
+    const templateSource: SourceArtifact = { name: 'eventtoapitemplateconfigpayload.json', rawText: JSON.stringify(tmpl.raw), parsed: tmpl.raw, role: 'template' };
+    const registrationSource: SourceArtifact = { name: 'eventtoapiadapterconfigpayload.json', rawText: JSON.stringify(reg.raw), parsed: reg.raw, role: 'registration' };
+    const result = buildReview(tmpl, reg, templateSource, registrationSource, []);
+    expect(result.review).toBeDefined();
+    const { decoded, effectiveParameters, findings } = result.review!;
+    expect(decoded.routes.length).toBeGreaterThan(0);
+    // Secrets in the decoded XML are detected and reported, but never revealed in rendered output.
+    expect(findings.some((f) => f.id === 'INLINE_SECRET')).toBe(true);
+    expect(decoded.safeXml).not.toContain('Temenos123');
+    expect(decoded.xml).toContain('Temenos123');
+    // All declared parameters are supplied by the registration.
+    expect(effectiveParameters.length).toBeGreaterThan(0);
+    expect(effectiveParameters.every((p) => p.state === 'Supplied')).toBe(true);
+    // The JOLT transform spec decodes to valid JSON and is not executed.
+    expect(result.review!.transformEngine).toBe('JOLT');
+    expect(Array.isArray(result.review!.transformSpec)).toBe(true);
   });
 });

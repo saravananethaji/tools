@@ -1,5 +1,6 @@
 import type { Finding, ReviewModel, SourceArtifact, TemplateDefinition, TemplateInstance } from './model';
 import { decodeTemplate, decodeTransformation, effectiveParameters, parseRegistration, parseTemplate, processReferenceFor, routeIdMatches, validateCrossArtifact } from './parser';
+import { containsSensitiveContent } from './safety';
 
 export function buildReview(
   template: TemplateDefinition,
@@ -26,6 +27,28 @@ export function buildReview(
       ],
     };
   }
+  // Alert the reviewer to sensitive values in imported raw artifacts without revealing the values.
+  const rawSecretScans: Array<{ artifact: 'registration' | 'template'; text: string }> = [
+    { artifact: 'registration', text: registrationSource.rawText },
+    { artifact: 'template', text: templateSource.rawText },
+  ];
+  for (const { artifact, text } of rawSecretScans) {
+    const id = `RAW_SECRET_${artifact.toUpperCase()}`;
+    if (
+      containsSensitiveContent(text)
+      && !baseFindings.some((f) => f.id === id && f.artifact === artifact)
+    ) {
+      baseFindings.push({
+        id,
+        severity: 'Warning',
+        category: 'Security',
+        artifact,
+        message: `Imported ${artifact} contains sensitive values; they are redacted in rendered output.`,
+        location: '$',
+      });
+    }
+  }
+
   const decoded = decodeTemplate(template);
   if (!decoded.decoded) return { findings: [...baseFindings, ...decoded.findings] };
   const parameters = effectiveParameters(template, matches[0], decoded.decoded);
