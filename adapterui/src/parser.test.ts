@@ -155,6 +155,19 @@ describe('static review parser', () => {
     expect(decoded.references.some((ref) => ref.kind === 'body')).toBe(true);
     expect(ids).not.toContain('XML_REF_UNDECLARED');
   });
+  it('finds redelivery-policy, unescaped XML in simple, missing bean attrs, and unresolved bean refs', () => {
+    const xml = '<beans xmlns="http://www.springframework.org/schema/beans" xmlns:camel="http://camel.apache.org/schema/spring"><camelContext xmlns="http://camel.apache.org/schema/spring"><route id="r"><from uri="direct:start"/><redeliveryPolicy maximumRedeliveries="3"/><simple>expressions should not contain &lt;unescaped&gt; markup</simple><bean ref="missingBean"/><bean/><to uri="direct:bad"/></route></camelContext></beans>';
+    const result = decodeTemplate({ ...template(), xmlRoute: btoa(xml) });
+    const ids = result.findings.map((item) => item.id);
+    // redelivery-policy structure check (has maxRedeliveries -> should NOT flag missing)
+    expect(ids).not.toContain('DSL_REDELIVERY_INCOMPLETE');
+    // Unescaped XML inside simple expression
+    expect(ids).toContain('DSL_SIMPLE_UNESCAPED');
+    // Missing bean attr (no id/ref/class)
+    expect(ids).toContain('DSL_BEAN_MISSING_ATTR');
+    // Unresolved bean ref
+    expect(ids).toContain('DSL_BEAN_REF_UNRESOLVED');
+  });
   it('reviews the supplied EventToApi files end to end: parses, decodes, redacts secrets, reports them', () => {
     const secretXml = '<beans xmlns="http://www.springframework.org/schema/beans" xmlns:camel="http://camel.apache.org/schema/spring"><camelContext xmlns="http://camel.apache.org/schema/spring"><onException><exception>org.apache.camel.http.base.HttpOperationFailedException</exception><onWhen><simple>${exception?.httpResponseCode} >= 500</simple><to uri="dead:error"/></onWhen></onException><route id="direct:eventtoapi.json.process"><from uri="direct:start"/><to uri="https://example.test" keyPassword="Temenos123"/><choice><when><simple>${exchangeProperty.httpEndPoint} != ""</simple><to uri="http://example.test"/></when></choice></route></camelContext></beans>';
     const joltB64 = btoa('[{"operation":"shift","spec":{"debitAccountIBAN":"body.debitAccountIBAN","paymentCurrencyId":"body.paymentCurrencyId","amount":"body.amount","beneficiaryIBAN":"body.beneficiaryIBAN"}}]');
