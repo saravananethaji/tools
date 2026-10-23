@@ -186,12 +186,25 @@ export function validateCrossArtifact(template: TemplateDefinition, instance: Te
 }
 
 export function decodeTransformation(instance: TemplateInstance): { spec?: unknown; engine?: 'JOLT' | 'XSLT'; findings: Finding[] } {
+  const findings: Finding[] = [];
   const entry = instance.inputParameters.find((parameter) => /(?:data\.)?(?:jolt|xslt)\.transform\.spec|data\.transform\.spec/i.test(parameter.name));
-  if (!entry) return { findings: [finding('TRANSFORM_MISSING', 'Not verified', 'Transformation', 'registration', 'No transformation specification parameter was found.')] };
-  const engine = entry.name.toLowerCase().includes('xslt') ? 'XSLT' : 'JOLT'; const decoded = strictBase64Decode(entry.value, 'registration', `parameter:${entry.name}`); if (!decoded.text) return { engine, findings: decoded.findings };
-  if (engine === 'JOLT') { try { return { engine, spec: JSON.parse(decoded.text), findings: [] }; } catch { return { engine, findings: [finding('JOLT_INVALID', 'Invalid', 'Transformation', 'registration', 'JOLT specification is not valid JSON.', `parameter:${entry.name}`)] }; } }
+  if (!entry) return { findings: [...findings, finding('TRANSFORM_MISSING', 'Not verified', 'Transformation', 'registration', 'No transformation specification parameter was found.')] };
+  const engine = entry.name.toLowerCase().includes('xslt') ? 'XSLT' : 'JOLT';
+  const decoded = strictBase64Decode(entry.value, 'registration', `parameter:${entry.name}`);
+  if (!decoded.text) return { engine, findings: [...findings, ...decoded.findings] };
+  // Pairing enforcement: JSON/JOLT and XML/XSLT only; unsupported or ambiguous pairings are marked Not verified.
+  if (engine === 'JOLT' && /<\?xml|<beans|<stylesheet/i.test(decoded.text)) findings.push(finding('TRANSFORM_PAIRING_INVALID', 'Invalid', 'Transformation', 'registration', 'JOLT specification paired with XML/XSLT payload; expected JSON.', `parameter:${entry.name}`));
+  if (engine === 'XSLT' && !decoded.text.trim().startsWith('<')) findings.push(finding('TRANSFORM_PAIRING_INVALID', 'Invalid', 'Transformation', 'registration', 'XSLT specification paired with non-XML payload; expected XML/XSLT.', `parameter:${entry.name}`));
+  if (engine === 'JOLT') {
+    try {
+      return { engine, spec: JSON.parse(decoded.text), findings };
+    } catch {
+      findings.push(finding('JOLT_INVALID', 'Invalid', 'Transformation', 'registration', 'JOLT specification is not valid JSON.', `parameter:${entry.name}`));
+      return { engine, findings };
+    }
+  }
   if (/<\!DOCTYPE|<\!ENTITY/i.test(decoded.text)) return { engine, findings: [finding('XSLT_EXTERNAL', 'Invalid', 'Transformation', 'registration', 'DTD and external entities are prohibited in XSLT.', `parameter:${entry.name}`)] };
   const document = new DOMParser().parseFromString(decoded.text, 'application/xml');
-  if (document.querySelector('parsererror') || document.documentElement.localName !== 'stylesheet' || document.documentElement.namespaceURI !== 'http://www.w3.org/1999/XSL/Transform') return { engine, findings: [finding('XSLT_INVALID', 'Invalid', 'Transformation', 'registration', 'Transformation is not a well-formed XSLT stylesheet.', `parameter:${entry.name}`)] };
-  return { engine, spec: decoded.text, findings: [] };
+  if (document.querySelector('parsererror') || document.documentElement.localName !== 'stylesheet' || document.documentElement.namespaceURI !== 'http://www.w3.org/1999/XSL/Transform') { findings.push(finding('XSLT_INVALID', 'Invalid', 'Transformation', 'registration', 'Transformation is not a well-formed XSLT stylesheet.', `parameter:${entry.name}`)); return { engine, findings }; }
+  return { engine, spec: decoded.text, findings };
 }

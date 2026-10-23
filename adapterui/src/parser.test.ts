@@ -41,6 +41,34 @@ describe('static review parser', () => {
     const parameters = effectiveParameters(template(), instance, decoded);
     expect(parameters.find((item) => item.name === 'timeout')?.state).toBe('Template default'); expect(parameters.find((item) => item.name === 'unknown')?.state).toBe('Undeclared supplied');
   });
+  it('covers all parameter precedence cases: declared-only, template-defaulted, registration-defaulted, registration-supplied, conflicting-default, missing-mandatory', () => {
+    const decoded = decodeTemplate(template()).decoded!; const baseInstance = registration().templates[0];
+    // Declared-only: declaration exists, no value from any source
+    const declaredOnly = parseTemplate({ ...templateInput, defaultParameters: [], inputParameters: [{ name: 'onlyDecl', helpText: 'declared', isMandatory: false, raw: {} }] }).template!;
+    const paramsDeclaredOnly = effectiveParameters(declaredOnly, { ...baseInstance, inputParameters: [], defaultParameters: [] }, decoded);
+    expect(paramsDeclaredOnly.find((p) => p.name === 'onlyDecl')?.state).toBe('Missing');
+    // Template-defaulted: only template default, no registration value
+    const tmplDefaultOnly = parseTemplate({ ...templateInput, inputParameters: [{ name: 'timeout', helpText: 't', isMandatory: false, raw: {} }], defaultParameters: [{ name: 'timeout', value: '30', raw: {} }] }).template!;
+    const paramsTmplDef = effectiveParameters(tmplDefaultOnly, { ...baseInstance, inputParameters: [], defaultParameters: [] }, decoded);
+    expect(paramsTmplDef.find((p) => p.name === 'timeout')?.state).toBe('Template default');
+    // Registration-defaulted: only registration default
+    const regDefOnly = parseRegistration({ ...registrationInput, templates: [{ ...baseInstance, inputParameters: [], defaultParameters: [{ name: 'timeout', value: '60', raw: {} }] }] }).registration!;
+    const paramsRegDef = effectiveParameters(template(), regDefOnly.templates[0], decoded);
+    expect(paramsRegDef.find((p) => p.name === 'timeout')?.state).toBe('Registration default');
+    // Registration-supplied: value from registration
+    const regSupplied = parseRegistration({ ...registrationInput, templates: [{ ...baseInstance, inputParameters: [{ name: 'timeout', value: '90', raw: {} }], defaultParameters: [] }] }).registration!;
+    const paramsRegSup = effectiveParameters(template(), regSupplied.templates[0], decoded);
+    expect(paramsRegSup.find((p) => p.name === 'timeout')?.state).toBe('Supplied');
+    // Conflicting-default: both template and registration defaults differ
+    const tmplConflict = parseTemplate({ ...templateInput, defaultParameters: [{ name: 'timeout', value: '99', raw: {} }] }).template!;
+    const regConflict = parseRegistration({ ...registrationInput, templates: [{ ...baseInstance, inputParameters: [], defaultParameters: [{ name: 'timeout', value: '100', raw: {} }] }] }).registration!;
+    const paramsConflict = effectiveParameters(tmplConflict, regConflict.templates[0], decoded);
+    expect(paramsConflict.find((p) => p.name === 'timeout')?.state).toBe('Registration default');
+    // Missing-mandatory: mandatory declaration with no value
+    const mandatoryOnly = parseTemplate({ ...templateInput, inputParameters: [{ name: 'mandatoryParam', helpText: 'mandatory', isMandatory: true, raw: {} }], defaultParameters: [] }).template!;
+    const paramsMandatory = effectiveParameters(mandatoryOnly, { ...baseInstance, inputParameters: [], defaultParameters: [] }, decoded);
+    expect(paramsMandatory.find((p) => p.name === 'mandatoryParam')?.state).toBe('Missing');
+  });
   it('validates JOLT and XSLT without executing transformations', () => {
     const joltInstance = { ...registration().templates[0], inputParameters: [{ name: 'data.transform.spec', value: btoa('{"operation":"shift"}'), raw: {} }] };
     expect(decodeTransformation(joltInstance).engine).toBe('JOLT');
