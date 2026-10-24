@@ -40,6 +40,7 @@ export const FeatureFileExplorer: React.FC<FeatureFileExplorerProps> = ({ onOpen
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [filterType, setFilterType] = useState<string>('all');
   const [expandedScenarios, setExpandedScenarios] = useState<Record<number, boolean>>({});
+  const [expandedPreconditions, setExpandedPreconditions] = useState<boolean>(true);
   const [allExpanded, setAllExpanded] = useState<boolean>(true);
   const [isDragOver, setIsDragOver] = useState<boolean>(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -742,7 +743,11 @@ export const FeatureFileExplorer: React.FC<FeatureFileExplorerProps> = ({ onOpen
               {/* Background Card */}
               {analysis.background.steps.length > 0 && filterType === 'all' && !searchQuery && (
                 <div className="ffe-card background-card">
-                  <div className="ffe-card-header">
+                  <div
+                    className="ffe-card-header clickable"
+                    onClick={() => setExpandedPreconditions(prev => !prev)}
+                    style={{ cursor: 'pointer' }}
+                  >
                     <div className="ffe-card-title-group">
                       <span
                         className="ffe-type-badge"
@@ -754,14 +759,17 @@ export const FeatureFileExplorer: React.FC<FeatureFileExplorerProps> = ({ onOpen
                         Background ({analysis.background.steps.length} steps)
                       </h4>
                     </div>
+                    <span className="ffe-collapse-icon">{expandedPreconditions ? '▲' : '▼'}</span>
                   </div>
-                  <div className="ffe-card-body">
-                    <ul className="ffe-steps-list">
-                      {analysis.background.steps.map((step, idx) => (
-                        <StepItem key={idx} step={step} onCopy={copyToClipboard} />
-                      ))}
-                    </ul>
-                  </div>
+                  {expandedPreconditions && (
+                    <div className="ffe-card-body">
+                      <ul className="ffe-steps-list">
+                        {analysis.background.steps.map((step, idx) => (
+                          <StepItem key={idx} step={step} onCopy={copyToClipboard} />
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                 </div>
               )}
 
