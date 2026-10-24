@@ -1523,7 +1523,7 @@ export const FeatureFileExplorer: React.FC<FeatureFileExplorerProps> = ({ onOpen
                   </button>
                   <button
                     className="ffe-btn ffe-btn-sm ffe-btn-accent"
-                    onClick={() => downloadPostmanCollection(analysis.apiCalls, analysis.feature.name || 'api-collection')}
+                    onClick={() => downloadPostmanCollection(analysis.apiCalls, analysis.feature.name || 'api-collection', resolvedFiles)}
                     title="Download Postman Collection v2.1 JSON"
                   >
                     📥 Download Postman Collection
@@ -2071,7 +2071,7 @@ function downloadJson(data: any, filename: string) {
   URL.revokeObjectURL(url);
 }
 
-function generatePostmanCollection(apiCalls: ApiCall[], collectionName: string) {
+function generatePostmanCollection(apiCalls: ApiCall[], collectionName: string, resolvedFiles?: Record<string, ResolvedPayloadFile>) {
   const items = apiCalls.map((api, idx) => {
     const url = api.uri || `http://localhost/api/endpoint-${idx + 1}`;
     const headers: Array<{ key: string; value: string }> = Object.entries(api.headers || {}).map(
@@ -2082,11 +2082,25 @@ function generatePostmanCollection(apiCalls: ApiCall[], collectionName: string) 
       headers.push({ key: 'UUID', value: api.uuid });
     }
 
-    const bodyContent = api.requestBodyFile ? {
-      mode: 'raw',
-      raw: `/* Payload file: ${api.requestBodyFile.split('/').pop() || api.requestBodyFile} */\n{}`,
-      options: { raw: { language: 'json' } },
-    } : undefined;
+    // Try to load actual payload content from resolved files
+    let bodyContent: { mode: string; raw: string; options: { raw: { language: string } } } | undefined;
+    if (api.requestBodyFile) {
+      const resolved = resolvedFiles?.[api.requestBodyFile];
+      const payloadText = resolved?.rawText;
+      if (payloadText) {
+        bodyContent = {
+          mode: 'raw',
+          raw: payloadText,
+          options: { raw: { language: 'json' } },
+        };
+      } else {
+        bodyContent = {
+          mode: 'raw',
+          raw: `/* Payload file not loaded: ${api.requestBodyFile.split('/').pop() || api.requestBodyFile} */\n{}`,
+          options: { raw: { language: 'json' } },
+        };
+      }
+    }
 
     return {
       name: `${api.scenarioName || `API Call ${idx + 1}`}`,
@@ -2128,8 +2142,8 @@ function generatePostmanCollection(apiCalls: ApiCall[], collectionName: string) 
   };
 }
 
-function downloadPostmanCollection(apiCalls: ApiCall[], collectionName: string) {
-  const collection = generatePostmanCollection(apiCalls, collectionName);
+function downloadPostmanCollection(apiCalls: ApiCall[], collectionName: string, resolvedFiles?: Record<string, ResolvedPayloadFile>) {
+  const collection = generatePostmanCollection(apiCalls, collectionName, resolvedFiles);
   downloadJson(collection, collectionName);
 }
 

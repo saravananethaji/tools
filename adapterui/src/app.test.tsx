@@ -285,7 +285,7 @@ describe('postman collection download', () => {
     expect(headerKeys).toContain('UUID');
   });
 
-  it('includes request body placeholder when payload file is referenced', async () => {
+  it('includes actual payload content from resolved files in request body', async () => {
     await loadFeatureAndOpenApiMatrix();
 
     const downloadBtn = Array.from(mounted!.host.querySelectorAll('button'))
@@ -297,7 +297,9 @@ describe('postman collection download', () => {
     const itemsWithBody = collection.item.filter((i: any) => i.request.body);
     expect(itemsWithBody.length).toBeGreaterThan(0);
     expect(itemsWithBody[0].request.body.mode).toBe('raw');
-    expect(itemsWithBody[0].request.body.raw).toContain('Payload file:');
+    // Body should contain actual JSON content, not an empty placeholder
+    expect(itemsWithBody[0].request.body.raw.trim()).not.toBe('{}');
+    expect(itemsWithBody[0].request.body.raw.length).toBeGreaterThan(10);
   });
 
   it('includes scenario context in request description', async () => {
