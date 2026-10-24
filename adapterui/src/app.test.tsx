@@ -3,6 +3,11 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { App } from './App';
 import { generatePostmanCollection } from './components/FeatureFileExplorer';
+import { parseFeatureText } from './components/featureParser';
+declare const __dirname: string;
+declare function require(module: string): any;
+const fs = require('fs');
+const path = require('path');
 
 // React 19 requires this flag before act() is used in a jsdom test.
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -504,6 +509,94 @@ describe('generatePostmanCollection (unit)', () => {
 
     expect(collection.info.name).toBe('Empty Collection');
     expect(collection.item).toEqual([]);
+  });
+});
+
+describe('generatePostmanCollection (integration with testfeature.feature)', () => {
+  const featurePath = path.resolve(__dirname, '../featurefiles/testfeature.feature');
+  const registrationDir = path.resolve(__dirname, '../eventToApi Registration');
+
+  it('parses testfeature.feature and includes real payload content from resolved files', () => {
+    // 1. Read and parse the actual test feature file
+    const featureContent = fs.readFileSync(featurePath, 'utf-8');
+    const analysis = parseFeatureText(featureContent);
+
+    // 2. Verify we found API endpoints
+    expect(analysis.apiCalls.length).toBeGreaterThan(0);
+
+    // 3. Build resolvedFiles from actual payload files that exist on disk
+    const resolvedFiles: Record<string, any> = {};
+    for (const api of analysis.apiCalls) {
+      if (api.requestBodyFile && fs.existsSync(api.requestBodyFile)) {
+        const rawText = fs.readFileSync(api.requestBodyFile, 'utf-8');
+        resolvedFiles[api.requestBodyFile] = {
+          name: path.basename(api.requestBodyFile),
+          path: api.requestBodyFile,
+          rawText,
+          source: 'folder',
+          fileKind: 'template',
+          parsedJson: JSON.parse(rawText),
+        };
+      }
+    }
+
+    // 4. At least one payload file should exist (eventtoapitemplateconfigpayload.json)
+    expect(Object.keys(resolvedFiles).length).toBeGreaterThan(0);
+
+    // 5. Generate collection with real resolved files
+    const collection = generatePostmanCollection(analysis.apiCalls, 'testfeature-collection', resolvedFiles);
+
+    // 6. Verify valid collection structure
+    expect(collection.info.schema).toBe('https://schema.getpostman.com/json/collection/v2.1.0/collection.json');
+    expect(collection.item.length).toBe(analysis.apiCalls.length);
+
+    // 7. Find the item that has a payload file resolved and verify real content
+    const itemsWithRealBody = collection.item.filter((i: any) =>
+      i.request.body && i.request.body.mode === 'raw' && !i.request.body.raw.includes('Payload file not loaded')
+    );
+    expect(itemsWithRealBody.length).toBeGreaterThan(0);
+
+    // 8. The template payload should contain actual JSON (not placeholder)
+    const templateItem = itemsWithRealBody[0];
+    expect(templateItem.request.body!.raw.length).toBeGreaterThan(100);
+    expect(templateItem.request.body!.raw).toContain('direct:eventtoapi.json.process');
+
+    // 9. Items without resolved payload files should have fallback placeholder
+    const itemsWithPlaceholder = collection.item.filter((i: any) =>
+      i.request.body && i.request.body.raw.includes('Payload file not loaded')
+    );
+    expect(itemsWithPlaceholder.length).toBeGreaterThan(0);
+  });
+
+  it('includes all detected API endpoints from testfeature.feature', () => {
+    const featureContent = fs.readFileSync(featurePath, 'utf-8');
+    const analysis = parseFeatureText(featureContent);
+
+    const collection = generatePostmanCollection(analysis.apiCalls, 'testfeature-collection', {});
+
+    // Each apiCall should become a collection item
+    expect(collection.item.length).toBe(analysis.apiCalls.length);
+
+    // Verify URIs match
+    const collectionUris = collection.item.map((i: any) => i.request.url.raw);
+    analysis.apiCalls.forEach((api) => {
+      expect(collectionUris).toContain(api.uri);
+    });
+  });
+
+  it('includes expected status codes from testfeature.feature scenarios', () => {
+    const featureContent = fs.readFileSync(featurePath, 'utf-8');
+    const analysis = parseFeatureText(featureContent);
+
+    const collection = generatePostmanCollection(analysis.apiCalls, 'testfeature-collection', {});
+
+    // Verify expected status codes appear in descriptions
+    const descriptions = collection.item.map((i: any) => i.request.description);
+    analysis.apiCalls.forEach((api) => {
+      if (api.expectedStatus) {
+        expect(descriptions.some((d: string) => d.includes(`Expected status: ${api.expectedStatus}`))).toBe(true);
+      }
+    });
   });
 });
 
