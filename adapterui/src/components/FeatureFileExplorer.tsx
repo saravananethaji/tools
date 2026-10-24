@@ -2071,7 +2071,7 @@ function downloadJson(data: any, filename: string) {
   URL.revokeObjectURL(url);
 }
 
-function generatePostmanCollection(apiCalls: ApiCall[], collectionName: string, resolvedFiles?: Record<string, ResolvedPayloadFile>) {
+export function generatePostmanCollection(apiCalls: ApiCall[], collectionName: string, resolvedFiles?: Record<string, ResolvedPayloadFile>) {
   const items = apiCalls.map((api, idx) => {
     const url = api.uri || `http://localhost/api/endpoint-${idx + 1}`;
     const headers: Array<{ key: string; value: string }> = Object.entries(api.headers || {}).map(

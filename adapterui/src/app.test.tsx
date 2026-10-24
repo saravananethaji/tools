@@ -2,6 +2,7 @@ import { describe, expect, it, afterEach, beforeEach } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { App } from './App';
+import { generatePostmanCollection } from './components/FeatureFileExplorer';
 
 // React 19 requires this flag before act() is used in a jsdom test.
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -390,6 +391,119 @@ describe('postman collection download', () => {
     collection.item.forEach((i: any) => {
       expect(Array.isArray(i.request.header)).toBe(true);
     });
+  });
+});
+
+describe('generatePostmanCollection (unit)', () => {
+  const sampleApiCalls = [
+    {
+      scenarioIndex: 0,
+      scenarioName: 'Template Configuration Scenario',
+      method: 'POST',
+      uri: '/system/adapters/templates/direct:ApiToApi',
+      expectedStatus: 201,
+      requestBodyFile: '/system/adapters/templates/payloads/template.json',
+      uuid: 'adapqi-da5244e-a140-470e-83ad-768cb225640',
+      headers: { 'Content-Type': 'application/json', UUID: 'adapqi-da5244e-a140-470e-83ad-768cb225640' } as Record<string, string>,
+      stepLine: 28,
+      rawStep: 'POST /system/adapters/templates/direct:ApiToApi',
+    },
+    {
+      scenarioIndex: 1,
+      scenarioName: 'Adapter Configuration Scenario',
+      method: 'POST',
+      uri: '/system/adapters/generic.Routeid',
+      expectedStatus: 201,
+      requestBodyFile: undefined,
+      uuid: undefined,
+      headers: { 'Content-Type': 'application/json' },
+      stepLine: 36,
+      rawStep: 'POST /system/adapters/generic.Routeid',
+    },
+  ];
+
+  const realPayloadContent = JSON.stringify({
+    templateId: 'direct:ApiToApi',
+    name: 'ApiToApi Template',
+    type: 'EVENTTOAPI',
+    templates: [],
+  }, null, 2);
+
+  const resolvedFilesWithContent: Record<string, any> = {
+    '/system/adapters/templates/payloads/template.json': {
+      name: 'template.json',
+      path: '/system/adapters/templates/payloads/template.json',
+      rawText: realPayloadContent,
+      source: 'folder',
+      fileKind: 'template',
+      parsedJson: JSON.parse(realPayloadContent),
+    },
+  };
+
+  // ---------- Positive scenarios ----------
+
+  it('includes actual payload content from resolvedFiles in request body', () => {
+    const collection = generatePostmanCollection(sampleApiCalls, 'Test Collection', resolvedFilesWithContent);
+
+    const templateItem = collection.item[0];
+    expect(templateItem.request.body).toBeDefined();
+    expect(templateItem.request.body!.mode).toBe('raw');
+    expect(templateItem.request.body!.raw).toBe(realPayloadContent);
+    expect(templateItem.request.body!.raw).toContain('templateId');
+    expect(templateItem.request.body!.raw).toContain('ApiToApi Template');
+  });
+
+  it('does not include body when requestBodyFile is undefined', () => {
+    const collection = generatePostmanCollection(sampleApiCalls, 'Test Collection', resolvedFilesWithContent);
+
+    const adapterItem = collection.item[1];
+    expect(adapterItem.request.body).toBeUndefined();
+  });
+
+  it('includes UUID header when api.uuid is present', () => {
+    const collection = generatePostmanCollection(sampleApiCalls, 'Test Collection', resolvedFilesWithContent);
+
+    const templateItem = collection.item[0];
+    const uuidHeader = templateItem.request.header.find((h: any) => h.key === 'UUID');
+    expect(uuidHeader).toBeDefined();
+    expect(uuidHeader!.value).toBe('adapqi-da5244e-a140-470e-83ad-768cb225640');
+  });
+
+  it('generates valid Postman Collection v2.1 schema', () => {
+    const collection = generatePostmanCollection(sampleApiCalls, 'Test Collection', resolvedFilesWithContent);
+
+    expect(collection.info.schema).toBe('https://schema.getpostman.com/json/collection/v2.1.0/collection.json');
+    expect(collection.info.name).toBe('Test Collection');
+    expect(Array.isArray(collection.item)).toBe(true);
+    expect(collection.item.length).toBe(2);
+  });
+
+  // ---------- Negative scenarios ----------
+
+  it('uses fallback placeholder when resolvedFiles does not contain the payload file', () => {
+    const emptyResolved: Record<string, any> = {};
+    const collection = generatePostmanCollection(sampleApiCalls, 'Test Collection', emptyResolved);
+
+    const templateItem = collection.item[0];
+    expect(templateItem.request.body).toBeDefined();
+    expect(templateItem.request.body!.mode).toBe('raw');
+    expect(templateItem.request.body!.raw).toContain('Payload file not loaded');
+    expect(templateItem.request.body!.raw).toContain('template.json');
+  });
+
+  it('handles undefined resolvedFiles gracefully', () => {
+    const collection = generatePostmanCollection(sampleApiCalls, 'Test Collection', undefined);
+
+    const templateItem = collection.item[0];
+    expect(templateItem.request.body).toBeDefined();
+    expect(templateItem.request.body!.raw).toContain('Payload file not loaded');
+  });
+
+  it('handles empty apiCalls array', () => {
+    const collection = generatePostmanCollection([], 'Empty Collection', resolvedFilesWithContent);
+
+    expect(collection.info.name).toBe('Empty Collection');
+    expect(collection.item).toEqual([]);
   });
 });
 
