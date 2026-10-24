@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { App } from './App';
 import { generatePostmanCollection } from './components/FeatureFileExplorer';
 import { parseFeatureText } from './components/featureParser';
+import { SAMPLE_FEATURE_CONTENT } from './components/sampleFeature';
 declare const __dirname: string;
 declare function require(module: string): any;
 const fs = require('fs');
@@ -596,6 +597,124 @@ describe('generatePostmanCollection (integration with testfeature.feature)', () 
       if (api.expectedStatus) {
         expect(descriptions.some((d: string) => d.includes(`Expected status: ${api.expectedStatus}`))).toBe(true);
       }
+    });
+  });
+});
+
+describe('generatePostmanCollection (integration with SAMPLE_FEATURE_CONTENT)', () => {
+  // This is the exact feature content loaded when user clicks "Load Sample Feature"
+  const analysis = parseFeatureText(SAMPLE_FEATURE_CONTENT);
+
+  it('parses SAMPLE_FEATURE_CONTENT and detects API endpoints', () => {
+    expect(analysis.apiCalls.length).toBeGreaterThan(0);
+    expect(analysis.apiCalls.some(a => a.uri.includes('/system/adapters/templates'))).toBe(true);
+    expect(analysis.apiCalls.some(a => a.uri.includes('/system/adapters/generic'))).toBe(true);
+    expect(analysis.apiCalls.some(a => a.uri.includes('/apitoapijobs'))).toBe(true);
+  });
+
+  it('generates collection items for all detected API endpoints', () => {
+    const collection = generatePostmanCollection(analysis.apiCalls, 'sample-feature-collection', {});
+
+    expect(collection.item.length).toBe(analysis.apiCalls.length);
+
+    // Verify URIs match the feature file
+    const collectionUris = collection.item.map((i: any) => i.request.url.raw);
+    analysis.apiCalls.forEach((api) => {
+      expect(collectionUris).toContain(api.uri);
+    });
+
+    // Verify methods
+    collection.item.forEach((item: any) => {
+      expect(['POST', 'GET', 'PUT', 'DELETE', 'PATCH']).toContain(item.request.method);
+    });
+  });
+
+  it('includes headers from SAMPLE_FEATURE_CONTENT background step', () => {
+    const collection = generatePostmanCollection(analysis.apiCalls, 'sample-feature-collection', {});
+
+    const allHeaders = collection.item.flatMap((i: any) => i.request.header || []);
+    const headerKeys = allHeaders.map((h: any) => h.key);
+
+    // Background sets Content-Type and UUID headers
+    expect(headerKeys).toContain('Content-Type');
+    expect(headerKeys).toContain('UUID');
+    expect(headerKeys).toContain('Authorization');
+  });
+
+  it('includes expected status codes in descriptions', () => {
+    const collection = generatePostmanCollection(analysis.apiCalls, 'sample-feature-collection', {});
+
+    const descriptions = collection.item.map((i: any) => i.request.description);
+    analysis.apiCalls.forEach((api) => {
+      if (api.expectedStatus) {
+        expect(descriptions.some((d: string) => d.includes(`Expected status: ${api.expectedStatus}`))).toBe(true);
+      }
+    });
+
+    // Sample feature has 201, 400, and 500 status codes
+    expect(descriptions.some((d: string) => d.includes('Expected status: 201'))).toBe(true);
+    expect(descriptions.some((d: string) => d.includes('Expected status: 400'))).toBe(true);
+    expect(descriptions.some((d: string) => d.includes('Expected status: 500'))).toBe(true);
+  });
+
+  it('uses fallback placeholder when payload files are not resolved', () => {
+    const collection = generatePostmanCollection(analysis.apiCalls, 'sample-feature-collection', {});
+
+    const itemsWithBody = collection.item.filter((i: any) => i.request.body);
+    expect(itemsWithBody.length).toBeGreaterThan(0);
+
+    // All items should have fallback placeholders since no payload files are resolved
+    itemsWithBody.forEach((item: any) => {
+      expect(item.request.body.mode).toBe('raw');
+      expect(item.request.body.raw).toContain('Payload file not loaded');
+    });
+  });
+
+  it('includes real payload content when resolvedFiles contains matching files', () => {
+    // Simulate that payload files have been resolved (as would happen after folder select/upload)
+    const realPayload = JSON.stringify({ templateId: 'direct:ApiToApi', type: 'EVENTTOAPI' }, null, 2);
+    const resolvedFiles: Record<string, any> = {};
+
+    analysis.apiCalls.forEach((api) => {
+      if (api.requestBodyFile) {
+        resolvedFiles[api.requestBodyFile] = {
+          name: path.basename(api.requestBodyFile),
+          path: api.requestBodyFile,
+          rawText: realPayload,
+          source: 'folder',
+          fileKind: 'template',
+          parsedJson: JSON.parse(realPayload),
+        };
+      }
+    });
+
+    const collection = generatePostmanCollection(analysis.apiCalls, 'sample-feature-collection', resolvedFiles);
+
+    const itemsWithRealBody = collection.item.filter((i: any) =>
+      i.request.body && i.request.body.raw === realPayload
+    );
+    expect(itemsWithRealBody.length).toBeGreaterThan(0);
+
+    // Verify the real JSON content is in the body
+    itemsWithRealBody.forEach((item: any) => {
+      expect(item.request.body!.raw).toContain('direct:ApiToApi');
+      expect(item.request.body!.raw).toContain('EVENTTOAPI');
+    });
+  });
+
+  it('collection has valid Postman v2.1 schema with SAMPLE_FEATURE_CONTENT', () => {
+    const collection = generatePostmanCollection(analysis.apiCalls, 'sample-feature-collection', {});
+
+    expect(collection.info.schema).toBe('https://schema.getpostman.com/json/collection/v2.1.0/collection.json');
+    expect(collection.info.name).toBe('sample-feature-collection');
+    expect(Array.isArray(collection.item)).toBe(true);
+    expect(collection.item.length).toBeGreaterThan(0);
+
+    // Every item should have a valid URL
+    collection.item.forEach((item: any) => {
+      expect(item.request.url.raw).toBeDefined();
+      expect(item.request.url.raw.length).toBeGreaterThan(0);
+      expect(item.request.method).toBeDefined();
     });
   });
 });
