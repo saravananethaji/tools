@@ -75,7 +75,10 @@ export const FeatureFileExplorer: React.FC<FeatureFileExplorerProps> = ({ onOpen
   const [selectedFeature, setSelectedFeature] = useState<{ name: string; fileName: string; relativePath: string; scenarioCount: number; backgroundSteps: number; tagsList: string[]; rawText: string } | null>(null);
   const [discoveryError, setDiscoveryError] = useState<string | null>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
+  const templateFolderInputRef = useRef<HTMLInputElement>(null);
   const singleFileInputRef = useRef<HTMLInputElement>(null);
+  // Accumulated files from all folder selections (feature + template folders)
+  const [allFolderFiles, setAllFolderFiles] = useState<File[]>([]);
 
   const jumpToFlow = (flowId: string) => {
     setActiveTab('adapters');
@@ -359,23 +362,25 @@ export const FeatureFileExplorer: React.FC<FeatureFileExplorerProps> = ({ onOpen
     setFolderResolving(true);
     setError(null);
 
-    // Generate path variants: exact, then up to 5 grandparent levels (../../../../../targetPath)
-    // This handles cases where template paths in the feature file are relative to a deep
-    // ancestor folder of where the feature file was selected.
-    const MAX_GRANDPARENT_LEVELS = 5;
-    const pathVariants = (targetPath: string): string[] => {
-      const variants: string[] = [targetPath];
-      for (let i = 1; i <= MAX_GRANDPARENT_LEVELS; i++) {
-        variants.push('../'.repeat(i) + targetPath);
-      }
-      return variants;
-    };
+    // Add newly selected folder files to the shared pool
+    const newFiles = Array.from(files);
+    setAllFolderFiles(prev => {
+      const merged = [...prev, ...newFiles];
+      // Deduplicate by name + webkitRelativePath
+      const seen = new Set<string>();
+      return merged.filter(f => {
+        const key = (f.webkitRelativePath || f.name) + '|' + f.name;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    });
 
     try {
-      const fileList = Array.from(files);
+      const fileList = Array.from(allFolderFiles).concat(newFiles);
 
       // Step 1: Find and parse .feature files from the selected folder
-      const featureFiles = fileList.filter(f => f.name.endsWith('.feature'));
+      const featureFiles = newFiles.filter(f => f.name.endsWith('.feature'));
 
       if (featureFiles.length === 0) {
         showToast('No .feature files found in the selected folder.');
@@ -399,52 +404,107 @@ export const FeatureFileExplorer: React.FC<FeatureFileExplorerProps> = ({ onOpen
       setExpandedScenarios(initialExpanded);
       setAllExpanded(true);
 
-      // Step 3: Extract payload paths from the parsed feature and match against folder contents
+      // Step 3: Extract payload paths from the parsed feature and match against ALL folder files
       const targetPaths = parsed.artifacts.payloadFiles;
-      let matchedCount = 0;
-      const newResolutions: Record<string, ResolvedPayloadFile> = {};
+      await matchPayloadsAgainstFiles(targetPaths, fileList, featureFile.name);
 
-      if (targetPaths.length > 0) {
-        for (const targetPath of targetPaths) {
-          const variants = pathVariants(targetPath);
-          const matchedFile = fileList.find(f => {
-            const relPath = f.webkitRelativePath || f.name;
-            return variants.some(v => matchesPath(v, relPath, f.name));
-          });
-
-          if (matchedFile) {
-            const text = await matchedFile.text();
-            const inspection = inspectPayloadJson(text, matchedFile.name);
-            newResolutions[targetPath] = {
-              name: matchedFile.name,
-              path: targetPath,
-              rawText: text,
-              source: 'folder',
-              fileKind: inspection.kind,
-              parsedJson: inspection.parsed,
-              parseError: inspection.error,
-            };
-            matchedCount++;
-          }
-        }
-      }
-
-      setResolvedFiles(prev => ({ ...prev, ...newResolutions }));
-
-      if (matchedCount > 0) {
-        showToast(`Loaded "${featureFile.name}" — auto-resolved ${matchedCount} payload file${matchedCount === 1 ? '' : 's'} from folder!`);
-      } else {
-        const suggested = suggestFolderFromPaths(targetPaths);
-        const hint = suggested
-          ? ` Try selecting the "${suggested}" folder (common ancestor containing both feature and payload files).`
-          : ' Try selecting a parent folder that contains both the feature file and its payload/template files.';
-        showToast(`Loaded "${featureFile.name}" — no payload files matched.${hint}`);
-      }
     } catch (err) {
       setError(`Failed to process folder: ${err instanceof Error ? err.message : 'Unknown error'}`);
     } finally {
       setFolderResolving(false);
       if (e.target) e.target.value = '';
+    }
+  };
+
+  // Select additional template/payload folders (e.g. src/test/resources/)
+  // Use this when feature files and payloads live in different directory trees.
+  const handleTemplateFolderSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    setFolderResolving(true);
+
+    const newFiles = Array.from(files);
+    setAllFolderFiles(prev => {
+      const merged = [...prev, ...newFiles];
+      const seen = new Set<string>();
+      return merged.filter(f => {
+        const key = (f.webkitRelativePath || f.name) + '|' + f.name;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    });
+
+    try {
+      const fileList = Array.from(allFolderFiles).concat(newFiles);
+
+      if (!analysis) {
+        showToast(`Added ${newFiles.length} template file(s). Select a feature folder to auto-match payloads.`);
+        return;
+      }
+
+      await matchPayloadsAgainstFiles(analysis.artifacts.payloadFiles, fileList, fileName || 'feature');
+    } catch (err) {
+      setError(`Failed to process template folder: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setFolderResolving(false);
+      if (e.target) e.target.value = '';
+    }
+  };
+
+  // Shared: match payload paths against a list of files using path variants (up to 5 grandparent levels)
+  const matchPayloadsAgainstFiles = async (
+    targetPaths: string[],
+    fileList: File[],
+    featureFileName: string
+  ): Promise<void> => {
+    // Generate path variants: exact, then up to 5 grandparent levels (../../../../../targetPath)
+    const MAX_GRANDPARENT_LEVELS = 5;
+    const pathVariants = (targetPath: string): string[] => {
+      const variants: string[] = [targetPath];
+      for (let i = 1; i <= MAX_GRANDPARENT_LEVELS; i++) {
+        variants.push('../'.repeat(i) + targetPath);
+      }
+      return variants;
+    };
+
+    let matchedCount = 0;
+    const newResolutions: Record<string, ResolvedPayloadFile> = {};
+
+    for (const targetPath of targetPaths) {
+      const variants = pathVariants(targetPath);
+      const matchedFile = fileList.find(f => {
+        const relPath = f.webkitRelativePath || f.name;
+        return variants.some(v => matchesPath(v, relPath, f.name));
+      });
+
+      if (matchedFile) {
+        const text = await matchedFile.text();
+        const inspection = inspectPayloadJson(text, matchedFile.name);
+        newResolutions[targetPath] = {
+          name: matchedFile.name,
+          path: targetPath,
+          rawText: text,
+          source: 'folder',
+          fileKind: inspection.kind,
+          parsedJson: inspection.parsed,
+          parseError: inspection.error,
+        };
+        matchedCount++;
+      }
+    }
+
+    setResolvedFiles(prev => ({ ...prev, ...newResolutions }));
+
+    if (matchedCount > 0) {
+      showToast(`"${featureFileName}" — auto-resolved ${matchedCount} payload file${matchedCount === 1 ? '' : 's'} from folder(s)!`);
+    } else {
+      const suggested = suggestFolderFromPaths(targetPaths);
+      const hint = suggested
+        ? ` Try also selecting the "${suggested}" folder as a template/payload folder.`
+        : ' Try selecting a parent folder that contains both the feature file and its payload/template files.';
+      showToast(`"${featureFileName}" — no payload files matched.${hint}`);
     }
   };
 
@@ -627,6 +687,14 @@ export const FeatureFileExplorer: React.FC<FeatureFileExplorerProps> = ({ onOpen
         style={{ display: 'none' }}
         {...({ webkitdirectory: '' } as Record<string, string>)}
         onChange={handleFolderSelect}
+      />
+      <input
+        type="file"
+        multiple
+        ref={templateFolderInputRef}
+        style={{ display: 'none' }}
+        {...({ webkitdirectory: '' } as Record<string, string>)}
+        onChange={handleTemplateFolderSelect}
       />
       <input
         type="file"
@@ -1136,10 +1204,18 @@ export const FeatureFileExplorer: React.FC<FeatureFileExplorerProps> = ({ onOpen
                     onClick={() => folderInputRef.current?.click()}
                     disabled={folderResolving}
                   >
-                    📂 {folderResolving ? 'Resolving Files…' : 'Select Project / Resources Folder'}
+                    📂 {folderResolving ? 'Resolving Files…' : 'Select Feature Folder'}
+                  </button>
+                  <button
+                    className="ffe-btn ffe-btn-secondary"
+                    onClick={() => templateFolderInputRef.current?.click()}
+                    disabled={folderResolving}
+                    title="Select additional folder(s) containing payload/template JSON files"
+                  >
+                    📁 {folderResolving ? 'Resolving…' : 'Select Template Folder(s)'}
                   </button>
                   <span style={{ fontSize: '0.84rem', color: '#94a3b8' }}>
-                    Auto-match feature paths against your local files on disk
+                    Select feature folder first, then add template/payload folder(s) to auto-resolve
                   </span>
                 </div>
 
