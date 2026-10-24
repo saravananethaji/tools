@@ -359,15 +359,17 @@ export const FeatureFileExplorer: React.FC<FeatureFileExplorerProps> = ({ onOpen
     setFolderResolving(true);
     setError(null);
 
-    // Generate path variants: exact, parent (..), grandparent (../../), great-grandparent (../../../)
-    // This handles cases where template paths in the feature file are relative to a parent/grandparent
-    // folder of where the feature file was selected.
-    const pathVariants = (targetPath: string): string[] => [
-      targetPath,
-      `../${targetPath}`,
-      `../../${targetPath}`,
-      `../../../${targetPath}`,
-    ];
+    // Generate path variants: exact, then up to 5 grandparent levels (../../../../../targetPath)
+    // This handles cases where template paths in the feature file are relative to a deep
+    // ancestor folder of where the feature file was selected.
+    const MAX_GRANDPARENT_LEVELS = 5;
+    const pathVariants = (targetPath: string): string[] => {
+      const variants: string[] = [targetPath];
+      for (let i = 1; i <= MAX_GRANDPARENT_LEVELS; i++) {
+        variants.push('../'.repeat(i) + targetPath);
+      }
+      return variants;
+    };
 
     try {
       const fileList = Array.from(files);
