@@ -96,5 +96,63 @@ describe('app shell', () => {
     expect(mounted.host.innerHTML).toContain('direct:eventtoapi.json.process');
     expect(mounted.host.innerHTML).toContain('SEPA PAYMENT EVENT TO REST API CALL');
   });
+
+  it('collapse all collapses both scenarios and preconditions', () => {
+    mounted = mount();
+    // Switch to Feature Explorer
+    const featTab = Array.from(mounted.host.querySelectorAll('[role="tab"]'))
+      .find((t) => t.textContent === 'Feature Explorer') as HTMLButtonElement;
+    act(() => { featTab.click(); });
+
+    // Load sample feature (has background/preconditions)
+    const loadSampleBtn = Array.from(mounted.host.querySelectorAll('button'))
+      .find((b) => b.textContent?.includes('Load Sample Feature')) as HTMLButtonElement;
+    act(() => { loadSampleBtn.click(); });
+
+    // Preconditions should be expanded by default
+    let preconditionsBody = mounted.host.querySelector('.background-card .ffe-card-body');
+    expect(preconditionsBody).not.toBeNull();
+    expect(preconditionsBody?.classList.contains('hidden')).toBe(false);
+
+    // Click "Collapse All" button
+    const collapseAllBtn = Array.from(mounted.host.querySelectorAll('button'))
+      .find((b) => b.textContent?.includes('Collapse All')) as HTMLButtonElement;
+    expect(collapseAllBtn).toBeDefined();
+    act(() => { collapseAllBtn.click(); });
+
+    // Preconditions should be collapsed
+    preconditionsBody = mounted.host.querySelector('.background-card .ffe-card-body');
+    expect(preconditionsBody).toBeNull(); // body removed when collapsed
+  });
+
+  it('expand all expands both scenarios and preconditions', () => {
+    mounted = mount();
+    const featTab = Array.from(mounted.host.querySelectorAll('[role="tab"]'))
+      .find((t) => t.textContent === 'Feature Explorer') as HTMLButtonElement;
+    act(() => { featTab.click(); });
+
+    const loadSampleBtn = Array.from(mounted.host.querySelectorAll('button'))
+      .find((b) => b.textContent?.includes('Load Sample Feature')) as HTMLButtonElement;
+    act(() => { loadSampleBtn.click(); });
+
+    // Collapse first
+    const collapseAllBtn = Array.from(mounted.host.querySelectorAll('button'))
+      .find((b) => b.textContent?.includes('Collapse All')) as HTMLButtonElement;
+    act(() => { collapseAllBtn.click(); });
+
+    // Verify collapsed
+    let preconditionsBody = mounted.host.querySelector('.background-card .ffe-card-body');
+    expect(preconditionsBody).toBeNull();
+
+    // Click "Expand All" button
+    const expandAllBtn = Array.from(mounted.host.querySelectorAll('button'))
+      .find((b) => b.textContent?.includes('Expand All')) as HTMLButtonElement;
+    expect(expandAllBtn).toBeDefined();
+    act(() => { expandAllBtn.click(); });
+
+    // Preconditions should be expanded again
+    preconditionsBody = mounted.host.querySelector('.background-card .ffe-card-body');
+    expect(preconditionsBody).not.toBeNull();
+  });
 });
 

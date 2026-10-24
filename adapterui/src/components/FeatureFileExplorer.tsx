@@ -236,6 +236,7 @@ export const FeatureFileExplorer: React.FC<FeatureFileExplorerProps> = ({ onOpen
     });
     setExpandedScenarios(updated);
     setAllExpanded(nextState);
+    setExpandedPreconditions(nextState);
   };
 
   // Resolve files from local folder picker
