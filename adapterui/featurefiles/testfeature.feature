@@ -21,7 +21,7 @@ Background:
 Scenario: To create an template configuration pertaining to API To API using HTTP POST METHOD 
 	And MS request URI is "/system/adapters/templates/direct:ApiToApi" 
 	And MS request header "UUID" is set to "adapqi-da5244e-a140-470e-83ad-768cb225538" 
-	And the MS request body is set to the contents of "src/test/resources/integration-cucumber-json-payload/usecasesjsonpayload/02_apitoapi/apitoapitemplateconfigpayload.json" 
+	And the MS request body is set to the contents of "/Users/saravanakumar/01_Coding/Active-Projects/tools/adapterui/eventToApi Registration/eventtoapitemplateconfigpayload.json" 
 	When a "POST" request is sent to MS 
 	And log all MS response in console 
 	Then MS response code should be 201
@@ -29,7 +29,7 @@ Scenario: To create an template configuration pertaining to API To API using HTT
 Scenario: To create an adapter configuration pertaining to API to API using HTTP POST METHOD 
 	And MS request URI is "/system/adapters/generic.Routeid" 
 	And MS request header "UUID" is set to "adapqi-da5244e-a140-470e-83ad-768cb225539" 
-	And the MS request body is set to the contents of "src/test/resources/integration-cucumber-json-payload/usecasesjsonpayload/02_apitoapi/apitoapiadapterconfigpayload.json" 
+	And the MS request body is set to the contents of "/Users/saravanakumar/01_Coding/Active-Projects/tools/adapterui/eventToApi Registration/apitoapiadapterconfigpayload.json" 
 	When a "POST" request is sent to MS 
 	And log all MS response in console 
 	Then MS response code should be 201	
@@ -38,7 +38,7 @@ Scenario: To create an adapter configuration pertaining to API to API using HTTP
 Scenario: To invoke an API internally using an Adapter API HTTP POST METHOD
 	And MS request URI is "system/apitoapijobs/ApiToApi" 
 	And MS request header "UUID" is set to "adapqi-da5244e-a140-470e-83ad-768cb225640" 
-	And the MS request body is set to the contents of "src/test/resources/integration-cucumber-json-payload/usecasesjsonpayload/02_apitoapi/apitoapirequestpayload.json" 
+	And the MS request body is set to the contents of "/Users/saravanakumar/01_Coding/Active-Projects/tools/adapterui/eventToApi Registration/apitoapirequestpayload.json" 
 	When a "POST" request is sent to MS 
 	And log all MS response in console 
 	Then MS response code should be 201 

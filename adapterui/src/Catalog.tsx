@@ -132,7 +132,7 @@ export function Catalog({ onOpenReviews }: {
   // Render the catalog UI.
   return (
     <div>
-      <h1>Folder Browser</h1>
+      <h2>Folder Browser</h2>
       <input
         type="file"
         multiple
