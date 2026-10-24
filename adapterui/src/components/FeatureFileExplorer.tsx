@@ -351,17 +351,16 @@ export const FeatureFileExplorer: React.FC<FeatureFileExplorerProps> = ({ onOpen
     setExpandedPreconditions(nextState);
   };
 
-  // Resolve files from local folder picker
+  // Resolve files from local folder picker - auto-discovers feature files and resolves payloads
   const handleFolderSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
-    if (!files || files.length === 0 || !analysis) return;
+    if (!files || files.length === 0) return;
 
     setFolderResolving(true);
-    let matchedCount = 0;
-    const newResolutions: Record<string, ResolvedPayloadFile> = {};
+    setError(null);
 
     // Generate path variants: exact, parent (..), grandparent (../../), great-grandparent (../../../)
-    // This handles cases where template paths in the feature file are relative to a grandparent
+    // This handles cases where template paths in the feature file are relative to a parent/grandparent
     // folder of where the feature file was selected.
     const pathVariants = (targetPath: string): string[] => [
       targetPath,
@@ -372,43 +371,96 @@ export const FeatureFileExplorer: React.FC<FeatureFileExplorerProps> = ({ onOpen
 
     try {
       const fileList = Array.from(files);
-      const targetPaths = analysis.artifacts.payloadFiles;
 
-      for (const targetPath of targetPaths) {
-        const variants = pathVariants(targetPath);
-        const matchedFile = fileList.find(f => {
-          const relPath = f.webkitRelativePath || f.name;
-          return variants.some(v => matchesPath(v, relPath, f.name));
-        });
+      // Step 1: Find and parse .feature files from the selected folder
+      const featureFiles = fileList.filter(f => f.name.endsWith('.feature'));
 
-        if (matchedFile) {
-          const text = await matchedFile.text();
-          const inspection = inspectPayloadJson(text, matchedFile.name);
-          newResolutions[targetPath] = {
-            name: matchedFile.name,
-            path: targetPath,
-            rawText: text,
-            source: 'folder',
-            fileKind: inspection.kind,
-            parsedJson: inspection.parsed,
-            parseError: inspection.error,
-          };
-          matchedCount++;
+      if (featureFiles.length === 0) {
+        showToast('No .feature files found in the selected folder.');
+        return;
+      }
+
+      // Step 2: Parse the first .feature file found
+      const featureFile = featureFiles[0];
+      const featureText = await featureFile.text();
+      const parsed = parseFeatureText(featureText);
+      setAnalysis(parsed);
+      setRawText(featureText);
+      setFileName(featureFile.name);
+      setFileSize(featureFile.size);
+
+      // Expand all scenarios initially
+      const initialExpanded: Record<number, boolean> = {};
+      parsed.scenarios.forEach(s => {
+        initialExpanded[s.index] = true;
+      });
+      setExpandedScenarios(initialExpanded);
+      setAllExpanded(true);
+
+      // Step 3: Extract payload paths from the parsed feature and match against folder contents
+      const targetPaths = parsed.artifacts.payloadFiles;
+      let matchedCount = 0;
+      const newResolutions: Record<string, ResolvedPayloadFile> = {};
+
+      if (targetPaths.length > 0) {
+        for (const targetPath of targetPaths) {
+          const variants = pathVariants(targetPath);
+          const matchedFile = fileList.find(f => {
+            const relPath = f.webkitRelativePath || f.name;
+            return variants.some(v => matchesPath(v, relPath, f.name));
+          });
+
+          if (matchedFile) {
+            const text = await matchedFile.text();
+            const inspection = inspectPayloadJson(text, matchedFile.name);
+            newResolutions[targetPath] = {
+              name: matchedFile.name,
+              path: targetPath,
+              rawText: text,
+              source: 'folder',
+              fileKind: inspection.kind,
+              parsedJson: inspection.parsed,
+              parseError: inspection.error,
+            };
+            matchedCount++;
+          }
         }
       }
 
       setResolvedFiles(prev => ({ ...prev, ...newResolutions }));
+
       if (matchedCount > 0) {
-        showToast(`Matched ${matchedCount} payload file${matchedCount === 1 ? '' : 's'} from folder!`);
+        showToast(`Loaded "${featureFile.name}" — auto-resolved ${matchedCount} payload file${matchedCount === 1 ? '' : 's'} from folder!`);
       } else {
-        showToast('No matching payload files found in selected folder. Try selecting the grandparent folder that contains the template/payload files.');
+        const suggested = suggestFolderFromPaths(targetPaths);
+        const hint = suggested
+          ? ` Try selecting the "${suggested}" folder (common ancestor containing both feature and payload files).`
+          : ' Try selecting a parent folder that contains both the feature file and its payload/template files.';
+        showToast(`Loaded "${featureFile.name}" — no payload files matched.${hint}`);
       }
     } catch (err) {
-      setError(`Error reading folder files: ${err instanceof Error ? err.message : String(err)}`);
+      setError(`Failed to process folder: ${err instanceof Error ? err.message : 'Unknown error'}`);
     } finally {
       setFolderResolving(false);
-      if (folderInputRef.current) folderInputRef.current.value = '';
+      if (e.target) e.target.value = '';
     }
+  };
+
+  // Derive a suggested folder from payload paths referenced in the feature file.
+  // If a payload path starts with a drive letter (Windows absolute) or an absolute path,
+  // we can't derive the base folder from the browser. But if it's a relative path like
+  // src/test/resources/..., the user should select a folder that, combined with that path,
+  // reaches the actual payload files.
+  const suggestFolderFromPaths = (paths: string[]): string | null => {
+    for (const p of paths) {
+      const norm = p.replace(/\\/g, '/').replace(/^([a-zA-Z]:)/, '');
+      const parts = norm.split('/').filter(Boolean);
+      if (parts.length >= 3) {
+        // Return the first 2-3 path segments as a suggested folder prefix
+        return parts.slice(0, 3).join('/');
+      }
+    }
+    return null;
   };
 
   // Single file upload trigger
