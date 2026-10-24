@@ -1509,17 +1509,26 @@ export const FeatureFileExplorer: React.FC<FeatureFileExplorerProps> = ({ onOpen
             <div className="ffe-matrix-card">
               <div className="ffe-matrix-header">
                 <h3>Detected HTTP API Endpoints ({analysis.apiCalls.length})</h3>
-                <button
-                  className="ffe-btn ffe-btn-sm"
-                  onClick={() =>
-                    copyToClipboard(
-                      analysis.apiCalls.map(a => `${a.method} ${a.uri}`).join('\n'),
-                      'API endpoints list'
-                    )
-                  }
-                >
-                  📋 Copy All Endpoints
-                </button>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                  <button
+                    className="ffe-btn ffe-btn-sm"
+                    onClick={() =>
+                      copyToClipboard(
+                        analysis.apiCalls.map(a => `${a.method} ${a.uri}`).join('\n'),
+                        'API endpoints list'
+                      )
+                    }
+                  >
+                    📋 Copy All Endpoints
+                  </button>
+                  <button
+                    className="ffe-btn ffe-btn-sm ffe-btn-accent"
+                    onClick={() => downloadPostmanCollection(analysis.apiCalls, analysis.feature.name || 'api-collection')}
+                    title="Download Postman Collection v2.1 JSON"
+                  >
+                    📥 Download Postman Collection
+                  </button>
+                </div>
               </div>
 
               <div className="ffe-matrix-table-wrap">
@@ -2044,6 +2053,85 @@ export const FeatureFileExplorer: React.FC<FeatureFileExplorerProps> = ({ onOpen
     </div>
   );
 };
+
+// -----------------------------------------------------------------------------
+// Postman Collection Generator (v2.1)
+// -----------------------------------------------------------------------------
+
+function downloadJson(data: any, filename: string) {
+  const json = JSON.stringify(data, null, 2);
+  const blob = new Blob([json], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${filename}.postman_collection.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function generatePostmanCollection(apiCalls: ApiCall[], collectionName: string) {
+  const items = apiCalls.map((api, idx) => {
+    const url = api.uri || `http://localhost/api/endpoint-${idx + 1}`;
+    const headers: Array<{ key: string; value: string }> = Object.entries(api.headers || {}).map(
+      ([key, value]) => ({ key, value })
+    );
+    // Ensure UUID header is present if available
+    if (api.uuid && !headers.find(h => h.key.toLowerCase() === 'uuid')) {
+      headers.push({ key: 'UUID', value: api.uuid });
+    }
+
+    const bodyContent = api.requestBodyFile ? {
+      mode: 'raw',
+      raw: `/* Payload file: ${api.requestBodyFile.split('/').pop() || api.requestBodyFile} */\n{}`,
+      options: { raw: { language: 'json' } },
+    } : undefined;
+
+    return {
+      name: `${api.scenarioName || `API Call ${idx + 1}`}`,
+      event: [
+        {
+          listen: 'prerequest',
+          script: {
+            type: 'text/javascript',
+            exec: [
+              `// Auto-generated from feature file scenario: ${api.scenarioName}`,
+              `// URI: ${api.uri}`,
+              `// Method: ${api.method}`,
+            ].join('\n'),
+          },
+        },
+      ],
+      request: {
+        method: api.method || 'POST',
+        header: headers,
+        url: {
+          raw: url,
+          protocol: 'http',
+          host: url.replace(/^https?:\/\//, '').split('/')[0] || 'localhost',
+          path: url.replace(/^https?:\/\/[^/]+/, '') || '/',
+        },
+        ...(bodyContent ? { body: bodyContent } : {}),
+        description: `Scenario: ${api.scenarioName}\nStep line: ${api.stepLine}\n${api.requestBodyFile ? `Payload file: ${api.requestBodyFile}` : ''}${api.uuid ? `\nUUID: ${api.uuid}` : ''}${api.expectedStatus ? `\nExpected status: ${api.expectedStatus}` : ''}`,
+      },
+    };
+  });
+
+  return {
+    info: {
+      name: collectionName,
+      description: `Postman collection generated from feature file API endpoints.\nTotal endpoints: ${apiCalls.length}`,
+      schema: 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json',
+    },
+    item: items,
+  };
+}
+
+function downloadPostmanCollection(apiCalls: ApiCall[], collectionName: string) {
+  const collection = generatePostmanCollection(apiCalls, collectionName);
+  downloadJson(collection, collectionName);
+}
 
 // -----------------------------------------------------------------------------
 // Helper Component: StepItem
