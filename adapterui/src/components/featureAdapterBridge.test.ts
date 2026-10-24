@@ -24,6 +24,32 @@ describe('featureAdapterBridge', () => {
     expect(matchesPath(featurePath, 'unrelated/path/other.json', 'other.json')).toBe(false);
   });
 
+  it('matches grandparent-relative paths (../../ prefix) for template files', () => {
+    const featurePath = 'src/test/resources/integration-cucumber-json-payload/usecasesjsonpayload/02_apitoapi/apitoapirequestpayload.json';
+    // Simulates: feature file references payload at src/test/resources/...,
+    // but selected folder is a subfolder, so file appears at ../../src/test/resources/...
+    expect(matchesPath(
+      '../../src/test/resources/integration-cucumber-json-payload/usecasesjsonpayload/02_apitoapi/apitoapirequestpayload.json',
+      'src/test/resources/integration-cucumber-json-payload/usecasesjsonpayload/02_apitoapi/apitoapirequestpayload.json',
+      'apitoapirequestpayload.json'
+    )).toBe(true);
+
+    // Also matches when only filename is available
+    expect(matchesPath(
+      '../../../src/test/resources/integration-cucumber-json-payload/usecasesjsonpayload/02_apitoapi/apitoapirequestpayload.json',
+      'apitoapirequestpayload.json',
+      'apitoapirequestpayload.json'
+    )).toBe(true);
+  });
+
+  it('does not match unrelated grandparent paths', () => {
+    expect(matchesPath(
+      '../../src/test/resources/other/payload.json',
+      'src/test/resources/unrelated/file.json',
+      'file.json'
+    )).toBe(false);
+  });
+
   it('detects sample payload paths accurately', () => {
     expect(isSamplePayloadPath(SAMPLE_ADAPTER_PATH)).toBe('adapter');
     expect(isSamplePayloadPath(SAMPLE_TEMPLATE_PATH)).toBe('template');

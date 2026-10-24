@@ -360,14 +360,25 @@ export const FeatureFileExplorer: React.FC<FeatureFileExplorerProps> = ({ onOpen
     let matchedCount = 0;
     const newResolutions: Record<string, ResolvedPayloadFile> = {};
 
+    // Generate path variants: exact, parent (..), grandparent (../../), great-grandparent (../../../)
+    // This handles cases where template paths in the feature file are relative to a grandparent
+    // folder of where the feature file was selected.
+    const pathVariants = (targetPath: string): string[] => [
+      targetPath,
+      `../${targetPath}`,
+      `../../${targetPath}`,
+      `../../../${targetPath}`,
+    ];
+
     try {
       const fileList = Array.from(files);
       const targetPaths = analysis.artifacts.payloadFiles;
 
       for (const targetPath of targetPaths) {
+        const variants = pathVariants(targetPath);
         const matchedFile = fileList.find(f => {
           const relPath = f.webkitRelativePath || f.name;
-          return matchesPath(targetPath, relPath, f.name);
+          return variants.some(v => matchesPath(v, relPath, f.name));
         });
 
         if (matchedFile) {
@@ -390,7 +401,7 @@ export const FeatureFileExplorer: React.FC<FeatureFileExplorerProps> = ({ onOpen
       if (matchedCount > 0) {
         showToast(`Matched ${matchedCount} payload file${matchedCount === 1 ? '' : 's'} from folder!`);
       } else {
-        showToast('No matching payload files found in selected folder.');
+        showToast('No matching payload files found in selected folder. Try selecting the grandparent folder that contains the template/payload files.');
       }
     } catch (err) {
       setError(`Error reading folder files: ${err instanceof Error ? err.message : String(err)}`);
