@@ -30,6 +30,8 @@ export interface FeatureFileExplorerProps {
   onOpenReviews?: (reviews: ReviewModel[], findings: Finding[]) => void;
 }
 
+import { DiscoveryModeUI } from './DiscoveryModeUI';
+
 export const FeatureFileExplorer: React.FC<FeatureFileExplorerProps> = ({ onOpenReviews }) => {
   const [fileName, setFileName] = useState<string>('');
   const [fileSize, setFileSize] = useState<number>(0);
@@ -64,6 +66,14 @@ export const FeatureFileExplorer: React.FC<FeatureFileExplorerProps> = ({ onOpen
   const [focusedFlowId, setFocusedFlowId] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [mode, setMode] = useState<'single' | 'discovery'>('single');
+  const isDiscoveryMode = mode === 'discovery';
+  const [discoveredFeatures, setDiscoveredFeatures] = useState<Array<{
+    name: string; fileName: string; relativePath: string; scenarioCount: number;
+    backgroundSteps: number; tagsList: string[]; rawText: string;
+  }>>([]);
+  const [selectedFeature, setSelectedFeature] = useState<{ name: string; fileName: string; relativePath: string; scenarioCount: number; backgroundSteps: number; tagsList: string[]; rawText: string } | null>(null);
+  const [discoveryError, setDiscoveryError] = useState<string | null>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
   const singleFileInputRef = useRef<HTMLInputElement>(null);
 
@@ -112,6 +122,108 @@ export const FeatureFileExplorer: React.FC<FeatureFileExplorerProps> = ({ onOpen
   };
 
   // Auto-resolve known sample payloads
+  
+  const scanFolderForFeatures = (folderHandle: FileSystemDirectoryHandle) => {
+    const features: Array<{ name: string; fileName: string; relativePath: string; scenarioCount: number; backgroundSteps: number; tagsList: string[]; rawText: string }> = [];
+    const scanDir = async (dir: FileSystemDirectoryHandle, basePath = '') => {
+      for await (const [name, handle] of dir.entries()) {
+        if (handle.kind === 'file' && name.endsWith('.feature')) {
+          try {
+            const file = await handle.getFile();
+            const text = await file.text();
+            const parsed = parseFeatureText(text);
+            features.push({
+              name: parsed.feature.name || name.replace('.feature', ''),
+              fileName: name,
+              relativePath: basePath ? `${basePath}/${name}` : name,
+              scenarioCount: parsed.scenarios.length,
+              backgroundSteps: parsed.background.steps.length,
+              tagsList: parsed.feature.tags || [],
+              rawText: text,
+            });
+          } catch {
+            // Skip unparseable feature files
+          }
+        } else if (handle.kind === 'directory') {
+          await scanDir(handle, basePath ? `${basePath}/${name}` : name);
+        }
+      }
+    };
+    return scanDir(folderHandle).then(() => features);
+  };
+
+  const selectFeatureForExploration = (feat: typeof discoveredFeatures[0]) => {
+    setSelectedFeature(feat);
+    setMode('single');
+    setFileName(feat.fileName);
+    setFileSize(feat.rawText.length);
+    setRawText(feat.rawText);
+    const parsed = parseFeatureText(feat.rawText);
+    setAnalysis(parsed);
+    autoResolveKnownFiles(parsed);
+    setError(null);
+    setActiveTab('scenarios');
+    setExpandedScenarios({});
+    setExpandedPreconditions(true);
+  };
+
+  const goBackToDiscovery = () => {
+    setSelectedFeature(null);
+    setMode('discovery');
+    setAnalysis(null);
+    setFileName('');
+    setRawText('');
+    setFileSize(0);
+    setError(null);
+    setActiveTab('scenarios');
+  };
+
+  const handleParentFolderSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    
+    setDiscoveryError('Scanning folder...');
+    setDiscoveredFeatures([]);
+    
+    try {
+      const filesList = Array.from(files);
+      const discovered: typeof discoveredFeatures = [];
+      
+      for (const f of filesList) {
+        if (f.name.endsWith('.feature')) {
+          const relPath = f.webkitRelativePath || f.name;
+          try {
+            const text = await f.text();  // Actually read the file content
+            const parsed = parseFeatureText(text);
+            discovered.push({
+              name: parsed.feature.name || f.name.replace('.feature', ''),
+              fileName: f.name,
+              relativePath: relPath,
+              scenarioCount: parsed.scenarios.length,
+              backgroundSteps: parsed.background.steps.length,
+              tagsList: parsed.feature.tags || [],
+              rawText: text,
+            });
+          } catch {
+            // Skip unparseable files
+          }
+        }
+      }
+      
+      setDiscoveredFeatures(discovered);
+      if (discovered.length === 0) {
+        setDiscoveryError('No .feature files found in the selected folder.');
+      } else {
+        setDiscoveryError(null);
+      }
+    } catch (err) {
+      setDiscoveryError(`Failed to scan folder: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    }
+    
+    // Reset so same folder can be re-selected
+    if (e.target) e.target.value = '';
+  };
+
   const autoResolveKnownFiles = (parsed: FeatureAnalysis) => {
     const resolutions: Record<string, ResolvedPayloadFile> = {};
     const bundledSamples = getBundledSampleResolutions();
@@ -426,6 +538,20 @@ export const FeatureFileExplorer: React.FC<FeatureFileExplorerProps> = ({ onOpen
     return null;
   }, [inspectingPayload]);
 
+  if (isDiscoveryMode) {
+    const folderHandleRef = folderInputRef;
+    return (
+      <DiscoveryModeUI
+        discoveredFeatures={discoveredFeatures}
+        discoveryError={discoveryError}
+        selectedFeature={selectedFeature}
+        onParentFolderSelect={handleParentFolderSelect}
+        onSelectFeature={selectFeatureForExploration}
+        onBackToDiscovery={goBackToDiscovery}
+      />
+    );
+  }
+
   return (
     <div className="ffe-container">
       {/* Hidden Folder & Single File Inputs */}
@@ -456,19 +582,40 @@ export const FeatureFileExplorer: React.FC<FeatureFileExplorerProps> = ({ onOpen
           </div>
 
           <div className="ffe-header-actions">
-            <button
-              className="ffe-btn ffe-btn-accent"
-              onClick={loadSample}
-              title="Load the bundled sample 01_adapter_apitoapi.feature"
-            >
-              ⚡ Load Sample Feature
-            </button>
-            <button
-              className="ffe-btn ffe-btn-primary"
-              onClick={() => fileInputRef.current?.click()}
-            >
-              📂 Browse .feature file
-            </button>
+            {(
+              isDiscoveryMode ? (
+                <>
+                  <button
+                    className="ffe-btn ffe-btn-secondary"
+                    onClick={() => setMode('single')}
+                  >
+                    📄 Single Feature Mode
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    className="ffe-btn ffe-btn-secondary"
+                    onClick={() => setMode('discovery')}
+                  >
+                    🔍 Feature Discovery
+                  </button>
+                  <button
+                    className="ffe-btn ffe-btn-accent"
+                    onClick={loadSample}
+                    title="Load the bundled sample 01_adapter_apitoapi.feature"
+                  >
+                    ⚡ Load Sample Feature
+                  </button>
+                  <button
+                    className="ffe-btn ffe-btn-primary"
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    📂 Browse .feature file
+                  </button>
+                </>
+              )
+            )}
           </div>
         </div>
 
