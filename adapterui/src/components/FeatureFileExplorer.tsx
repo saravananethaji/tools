@@ -1088,6 +1088,18 @@ export const FeatureFileExplorer: React.FC<FeatureFileExplorerProps> = ({ onOpen
                   >
                     {Object.keys(resolvedFiles).length} of {analysis.artifacts.payloadFiles.length} Payloads Loaded
                   </span>
+                  {Object.keys(resolvedFiles).length > 0 && (
+                    <button
+                      className="ffe-btn ffe-btn-sm ffe-btn-accent"
+                      onClick={() => {
+                        setResolvedFiles({});
+                        showToast('All payload files reset!');
+                      }}
+                      title="Clear all loaded adapter and template JSON files"
+                    >
+                      🔄 Reset All Files
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -1172,11 +1184,31 @@ export const FeatureFileExplorer: React.FC<FeatureFileExplorerProps> = ({ onOpen
                           <span className="ffe-config-col-title">
                             <span>🔌</span> Adapter Registration JSON
                           </span>
-                          <span className={`ffe-status-pill ${hasAdapter ? 'resolved' : 'pending'}`}>
-                            {hasAdapter
-                              ? `✓ ${adapterFile?.source === 'bundled-sample' ? 'Sample' : 'Loaded'}`
-                              : 'Pending File'}
-                          </span>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <span className={`ffe-status-pill ${hasAdapter ? 'resolved' : 'pending'}`}>
+                              {hasAdapter
+                                ? `✓ ${adapterFile?.source === 'bundled-sample' ? 'Sample' : 'Loaded'}`
+                                : 'Pending File'}
+                            </span>
+                            {hasAdapter && (
+                              <button
+                                className="ffe-btn ffe-btn-sm ffe-btn-accent"
+                                onClick={() => {
+                                  setResolvedFiles(prev => {
+                                    const next = { ...prev };
+                                    if (pair.adapterConfig?.path) {
+                                      delete next[pair.adapterConfig.path];
+                                    }
+                                    return next;
+                                  });
+                                  showToast('Reset adapter JSON file!');
+                                }}
+                                title="Clear the loaded adapter JSON file"
+                              >
+                                🔄 Reset
+                              </button>
+                            )}
+                          </div>
                         </div>
 
                         {pair.adapterConfig && (
@@ -1207,18 +1239,36 @@ export const FeatureFileExplorer: React.FC<FeatureFileExplorerProps> = ({ onOpen
 
                             <div className="ffe-config-actions-row">
                               {hasAdapter ? (
-                                <button
-                                  className="ffe-btn ffe-btn-sm ffe-btn-accent"
-                                  onClick={() =>
-                                    setInspectingPayload({
-                                      name: adapterFile.name,
-                                      path: pair.adapterConfig!.path,
-                                      file: adapterFile,
-                                    })
-                                  }
-                                >
-                                  👁️ Preview JSON
-                                </button>
+                                <>
+                                  <button
+                                    className="ffe-btn ffe-btn-sm ffe-btn-accent"
+                                    onClick={() =>
+                                      setInspectingPayload({
+                                        name: adapterFile.name,
+                                        path: pair.adapterConfig!.path,
+                                        file: adapterFile,
+                                      })
+                                    }
+                                  >
+                                    👁️ Preview JSON
+                                  </button>
+                                  <button
+                                    className="ffe-btn ffe-btn-sm"
+                                    onClick={() => {
+                                      setResolvedFiles(prev => {
+                                        const next = { ...prev };
+                                        if (pair.adapterConfig?.path) {
+                                          delete next[pair.adapterConfig.path];
+                                        }
+                                        return next;
+                                      });
+                                      showToast('Reset adapter JSON file!');
+                                    }}
+                                    title="Clear the loaded adapter JSON file"
+                                  >
+                                    🔄 Reset
+                                  </button>
+                                </>
                               ) : null}
 
                               <button
@@ -1255,13 +1305,33 @@ export const FeatureFileExplorer: React.FC<FeatureFileExplorerProps> = ({ onOpen
                           <span className="ffe-config-col-title">
                             <span>🧩</span> {totalTemplates > 1 ? `Associated Templates (${totalTemplates})` : 'Template Definition JSON'}
                           </span>
-                          <span className={`ffe-status-pill ${allTemplatesResolved ? 'resolved' : 'pending'}`}>
-                            {totalTemplates === 0
-                              ? 'No Template'
-                              : allTemplatesResolved
-                              ? `✓ ${totalTemplates > 1 ? `All ${totalTemplates} Loaded` : (resolvedFiles[pair.templateConfigs[0].path]?.source === 'bundled-sample' ? 'Sample' : 'Loaded')}`
-                              : `${resolvedTemplates.length} of ${totalTemplates} Loaded`}
-                          </span>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <span className={`ffe-status-pill ${allTemplatesResolved ? 'resolved' : 'pending'}`}>
+                              {totalTemplates === 0
+                                ? 'No Template'
+                                : allTemplatesResolved
+                                ? `✓ ${totalTemplates > 1 ? `All ${totalTemplates} Loaded` : (resolvedFiles[pair.templateConfigs[0].path]?.source === 'bundled-sample' ? 'Sample' : 'Loaded')}`
+                                : `${resolvedTemplates.length} of ${totalTemplates} Loaded`}
+                            </span>
+                            {(resolvedTemplates.length > 0) && (
+                              <button
+                                className="ffe-btn ffe-btn-sm ffe-btn-accent"
+                                onClick={() => {
+                                  setResolvedFiles(prev => {
+                                    const next = { ...prev };
+                                    pair.templateConfigs.forEach(tpl => {
+                                      delete next[tpl.path];
+                                    });
+                                    return next;
+                                  });
+                                  showToast(`Reset ${resolvedTemplates.length} template file${resolvedTemplates.length === 1 ? '' : 's'}!`);
+                                }}
+                                title="Clear all loaded template JSON files for this adapter flow"
+                              >
+                                🔄 Reset All
+                              </button>
+                            )}
+                          </div>
                         </div>
 
                         {totalTemplates === 0 ? (
@@ -1316,18 +1386,34 @@ export const FeatureFileExplorer: React.FC<FeatureFileExplorerProps> = ({ onOpen
 
                                   <div className="ffe-config-actions-row">
                                     {hasTpl ? (
-                                      <button
-                                        className="ffe-btn ffe-btn-sm ffe-btn-accent"
-                                        onClick={() =>
-                                          setInspectingPayload({
-                                            name: tplFile.name,
-                                            path: tpl.path,
-                                            file: tplFile,
-                                          })
-                                        }
-                                      >
-                                        👁️ Preview JSON / XML
-                                      </button>
+                                      <>
+                                        <button
+                                          className="ffe-btn ffe-btn-sm ffe-btn-accent"
+                                          onClick={() =>
+                                            setInspectingPayload({
+                                              name: tplFile.name,
+                                              path: tpl.path,
+                                              file: tplFile,
+                                            })
+                                          }
+                                        >
+                                          👁️ Preview JSON / XML
+                                        </button>
+                                        <button
+                                          className="ffe-btn ffe-btn-sm"
+                                          onClick={() => {
+                                            setResolvedFiles(prev => {
+                                              const next = { ...prev };
+                                              delete next[tpl.path];
+                                              return next;
+                                            });
+                                            showToast(`Reset template: ${tpl.fileName}`);
+                                          }}
+                                          title={`Clear this template JSON file (${tpl.fileName})`}
+                                        >
+                                          🔄 Reset
+                                        </button>
+                                      </>
                                     ) : null}
 
                                     <button

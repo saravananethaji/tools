@@ -198,3 +198,22 @@
     margin-top: 16px;
   }
 }
+/* Reset buttons for file pickers (import panel) */
+.file-control { position: relative; }
+.reset-file-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  padding: 4px 10px;
+  font-size: 0.72rem;
+  border-radius: 6px;
+  border: 1px solid #475569;
+  background: #1e293b;
+  color: #94a3b8;
+  z-index: 2;
+}
+.reset-file-btn:hover {
+  background: #334155;
+  color: #f1f5f9;
+  border-color: #64748b;
+}
