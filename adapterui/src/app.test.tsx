@@ -849,3 +849,59 @@ describe('7-tabs validation with committed test fixtures (02_adapter_eventtoapi 
   });
 });
 
+describe('Back to Features List flow', () => {
+  let mounted: ReturnType<typeof mount> | undefined;
+  afterEach(() => { mounted?.unmount(); mounted = undefined; });
+
+  it('switches to Feature Explorer tab and shows ← Back to Features List button', () => {
+    mounted = mount();
+    const featTab = Array.from(mounted.host.querySelectorAll('[role="tab"]'))
+      .find((t) => t.textContent === 'Feature Explorer') as HTMLButtonElement;
+    act(() => { featTab.click(); });
+
+    expect(mounted.host.innerHTML).toContain('Feature File Explorer');
+    expect(mounted.host.innerHTML).toContain('← Back to Features List');
+    expect(mounted.host.innerHTML).toContain('🔍 Feature Discovery');
+  });
+
+  it('clicking ← Back to Features List switches to discovery mode', () => {
+    mounted = mount();
+    const featTab = Array.from(mounted.host.querySelectorAll('[role="tab"]'))
+      .find((t) => t.textContent === 'Feature Explorer') as HTMLButtonElement;
+    act(() => { featTab.click(); });
+
+    // Initially in single mode with back button visible
+    expect(mounted.host.innerHTML).toContain('← Back to Features List');
+
+    // Click back button to return to discovery mode
+    const backBtn = Array.from(mounted.host.querySelectorAll('button'))
+      .find((b) => b.textContent?.includes('Back to Features List')) as HTMLButtonElement;
+    act(() => { backBtn.click(); });
+
+    // Should now show discovery mode UI
+    expect(mounted.host.innerHTML).toContain('Feature Discovery — Browse Folder');
+    expect(mounted.host.innerHTML).toContain('Select Feature Folder');
+  });
+
+  it('navigates from single mode back to discovery and feature list stays painted', () => {
+    mounted = mount();
+
+    // Switch to Feature Explorer tab (starts in single mode)
+    const featTab = Array.from(mounted.host.querySelectorAll('[role="tab"]'))
+      .find((t) => t.textContent === 'Feature Explorer') as HTMLButtonElement;
+    act(() => { featTab.click(); });
+
+    // Initially in single mode with back button visible
+    expect(mounted.host.innerHTML).toContain('← Back to Features List');
+
+    // Click back button to return to discovery mode
+    const backBtn = Array.from(mounted.host.querySelectorAll('button'))
+      .find((b) => b.textContent?.includes('Back to Features List')) as HTMLButtonElement;
+    act(() => { backBtn.click(); });
+
+    // Should now show discovery mode UI (folder selections preserved)
+    expect(mounted.host.innerHTML).toContain('Feature Discovery — Browse Folder');
+    expect(mounted.host.innerHTML).toContain('Select Feature Folder');
+  });
+});
+
