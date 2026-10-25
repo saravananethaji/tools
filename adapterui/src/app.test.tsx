@@ -28,13 +28,13 @@ describe('app shell', () => {
   let mounted: ReturnType<typeof mount> | undefined;
   afterEach(() => { mounted?.unmount(); mounted = undefined; });
 
-  it('lands on the folder browser and offers both modes', () => {
+  it('lands on the adapter catalog and offers both modes', () => {
     mounted = mount();
     const html = mounted.host.innerHTML;
-    expect(html).toContain('Use-case folder browser');
+    expect(html).toContain('Adapter Catalog');
     const tabs = Array.from(mounted.host.querySelectorAll('[role="tab"]')).map((t) => t.textContent);
-    expect(tabs).toEqual(['Folder browser', 'Single review', 'Feature Explorer']);
-    expect(mounted.host.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('Folder browser');
+    expect(tabs).toEqual(['Adapter Catalog', 'Feature Explorer']);
+    expect(mounted.host.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('Adapter Catalog');
   });
 
   it('switches to the feature-explorer mode', () => {
@@ -47,24 +47,32 @@ describe('app shell', () => {
     expect(mounted.host.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('Feature Explorer');
   });
 
-  it('switches to the single-review mode and keeps its import flow', () => {
+  it('shows two loading options in Adapter Catalog mode', () => {
     mounted = mount();
-    const single = Array.from(mounted.host.querySelectorAll('[role="tab"]'))
-      .find((t) => t.textContent === 'Single review') as HTMLButtonElement;
-    act(() => { single.click(); });
     const html = mounted.host.innerHTML;
-    expect(html).toContain('Adapter configuration review');
-    expect(html).toContain('1. Adapter registration JSON');
-    expect(html).toContain('2. Template definition JSON file(s)');
-    expect(mounted.host.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('Single review');
+    expect(html).toContain('Adapter Catalog');
+    expect(html).toContain('A. Scan Folder');
+    expect(html).toContain('B. Select Files');
+    const tabs = Array.from(mounted.host.querySelectorAll('[role="tab"]')).map((t) => t.textContent);
+    expect(tabs).toEqual(['Adapter Catalog', 'Feature Explorer']);
+    expect(mounted.host.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('Adapter Catalog');
   });
 
-  it('exposes the folder picker only in catalog mode', () => {
+  it('file import flow works within Adapter Catalog (Option B)', () => {
+    mounted = mount();
+    const html = mounted.host.innerHTML;
+    expect(html).toContain('1. Adapter registration JSON');
+    expect(html).toContain('2. Template definition JSON file(s)');
+    expect(html).toContain('Choose registration');
+    expect(html).toContain('Load review');
+  });
+
+  it('folder picker is visible in Adapter Catalog but not Feature Explorer', () => {
     mounted = mount();
     expect(mounted.host.querySelector('input[aria-label="Select a use-case folder"]')).not.toBeNull();
-    const single = Array.from(mounted.host.querySelectorAll('[role="tab"]'))
-      .find((t) => t.textContent === 'Single review') as HTMLButtonElement;
-    act(() => { single.click(); });
+    const featTab = Array.from(mounted.host.querySelectorAll('[role="tab"]'))
+      .find((t) => t.textContent === 'Feature Explorer') as HTMLButtonElement;
+    act(() => { featTab.click(); });
     expect(mounted.host.querySelector('input[aria-label="Select a use-case folder"]')).toBeNull();
   });
 
