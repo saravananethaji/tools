@@ -3,7 +3,8 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { App } from './App';
 import { generatePostmanCollection } from './components/FeatureFileExplorer';
-import { parseFeatureText } from './components/featureParser';
+import { matchesPath } from './components/featureAdapterBridge';
+import { parseFeatureText, generateMarkdownExplanation } from './components/featureParser';
 import { SAMPLE_FEATURE_CONTENT } from './components/sampleFeature';
 declare const __dirname: string;
 declare function require(module: string): any;
@@ -716,6 +717,135 @@ describe('generatePostmanCollection (integration with SAMPLE_FEATURE_CONTENT)', 
       expect(item.request.url.raw.length).toBeGreaterThan(0);
       expect(item.request.method).toBeDefined();
     });
+  });
+});
+
+describe('7-tabs validation with committed test fixtures (02_adapter_eventtoapi validation)', () => {
+  const featurePath = path.resolve(__dirname, '../ms-adapterservice-test/cucumber-test-scripts/integration-cucumber-test-scripts/UTP/02_adapter_eventtoapi validation.feature');
+  const baseTestDataPath = path.resolve(__dirname, '../ms-adapterservice-test/src/test/resources/integration-cucumber-json-payload');
+
+  const featureContent = fs.readFileSync(featurePath, 'utf-8');
+  const analysis = parseFeatureText(featureContent);
+
+  // Resolve payloads using grandparent path matching (same logic as FeatureFileExplorer.handleFolderSelect)
+  const MAX_GRANDPARENT_LEVELS = 5;
+  const pathVariants = (targetPath: string): string[] => {
+    const variants: string[] = [targetPath];
+    for (let i = 1; i <= MAX_GRANDPARENT_LEVELS; i++) {
+      variants.push('../'.repeat(i) + targetPath);
+    }
+    return variants;
+  };
+
+  // Collect all files from base test data folder (simulating webkitRelativePath)
+  const allFiles: { name: string; relPath: string }[] = [];
+  const walkDir = (dir: string, baseDir: string) => {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.name === '.DS_Store') continue;
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walkDir(fullPath, baseDir);
+      } else {
+        const relPath = path.relative(baseDir, fullPath).split(path.sep).join('/');
+        allFiles.push({ name: entry.name, relPath });
+      }
+    }
+  };
+  walkDir(baseTestDataPath, baseTestDataPath);
+
+  const resolvedPayloads: Record<string, any> = {};
+  for (const targetPath of analysis.artifacts.payloadFiles) {
+    const variants = pathVariants(targetPath);
+    const matchedFile = allFiles.find(f => {
+      return variants.some(v => matchesPath(v, f.relPath, f.name));
+    });
+    if (matchedFile) {
+      resolvedPayloads[targetPath] = {
+        name: matchedFile.name,
+        path: targetPath,
+        rawText: fs.readFileSync(path.join(baseTestDataPath, matchedFile.relPath), 'utf-8'),
+        source: 'folder',
+      };
+    }
+  }
+
+  describe('Tab 1: Scenarios & Flow', () => {
+    it('should load 3 scenarios', () => {
+      expect(analysis.scenarios.length).toBe(3);
+      expect(analysis.stats.totalScenarios).toBe(3);
+    });
+
+    it('ViewFlow#1 should open with adapter registration json loaded', () => {
+      expect(analysis.configurations.pairs.length).toBeGreaterThanOrEqual(1);
+      const pair = analysis.configurations.pairs[0];
+      expect(pair.adapterConfig).toBeDefined();
+      expect(pair.adapterConfig!.path).toContain('eventtoapiadapterconfigpayload');
+    });
+  });
+
+  describe('Tab 2: Adapter & Templates', () => {
+    it('should have adapter registration json loaded', () => {
+      const pair = analysis.configurations.pairs[0];
+      expect(pair.adapterConfig).toBeDefined();
+      expect(pair.adapterConfig!.path).toContain('eventtoapiadapterconfigpayload');
+    });
+
+    it('should have template definition json loaded', () => {
+      const pair = analysis.configurations.pairs[0];
+      expect(pair.templateConfigs.length).toBeGreaterThanOrEqual(1);
+      expect(pair.templateConfigs[0]!.path).toContain('eventtoapitemplateconfigpayload');
+    });
+  });
+
+  describe('Tab 3: API Matrix', () => {
+    it('should have 2 endpoints', () => {
+      expect(analysis.apiCalls.length).toBe(2);
+    });
+  });
+
+  describe('Tab 4: Validation', () => {
+    it('should have 1 database assertion', () => {
+      expect(analysis.dataValidations.length).toBe(1);
+    });
+  });
+
+  describe('Tab 5: Artifacts & Tokens', () => {
+    it('should have payload files loaded via grandparent matching', () => {
+      expect(analysis.artifacts.payloadFiles.length).toBe(2);
+      expect(Object.keys(resolvedPayloads).length).toBe(2);
+    });
+
+    it('should resolve adapter + template payload files including grandparent path variants', () => {
+      const payloadNames = Object.keys(resolvedPayloads);
+      expect(payloadNames.some(p => p.includes('eventtoapitemplateconfigpayload'))).toBe(true);
+      expect(payloadNames.some(p => p.includes('eventtoapiadapterconfigpayload'))).toBe(true);
+    });
+  });
+
+  describe('Tab 6: Human Explanation', () => {
+    it('should have feature analysis header', () => {
+      const explanation = generateMarkdownExplanation(analysis);
+      expect(explanation).toContain('# Feature Analysis: 02_adapter_eventtoapi validation');
+    });
+  });
+
+  describe('Tab 7: Raw.feature', () => {
+    it('should contain feature header text', () => {
+      expect(featureContent).toContain('Feature: 02_adapter_eventtoapi validation');
+    });
+  });
+
+  it('Postman Collection download should include real payload content', () => {
+    const collection = generatePostmanCollection(analysis.apiCalls, '02_adapter_eventtoapi-validation', resolvedPayloads);
+    expect(collection.info.schema).toBe('https://schema.getpostman.com/json/collection/v2.1.0/collection.json');
+    expect(collection.item.length).toBe(analysis.apiCalls.length);
+
+    // At least one item should have real payload content (not fallback placeholder)
+    const itemsWithRealBody = collection.item.filter((i: any) =>
+      i.request.body && i.request.body.mode === 'raw' && !i.request.body.raw.includes('Payload file not loaded')
+    );
+    expect(itemsWithRealBody.length).toBeGreaterThan(0);
   });
 });
 
