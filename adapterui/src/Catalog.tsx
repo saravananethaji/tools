@@ -132,7 +132,7 @@ export function Catalog({ onOpenReviews }: {
   // Render the catalog UI.
   return (
     <div>
-      <h2>Folder Browser</h2>
+      <h2>Adapter Catalog</h2>
       <input
         type="file"
         multiple
@@ -176,7 +176,73 @@ export function Catalog({ onOpenReviews }: {
                   <p>Status: <strong>{useCase.registration.status}</strong></p>
                   <p>Stages: {useCase.stages.length}</p>
                 </div>
-                
+
+                <div className="registration-details">
+                  <h3>Registration Details</h3>
+                  <dl className="details-list">
+                    <dt>Name</dt>
+                    <dd>{useCase.registration.name}</dd>
+                    <dt>Type</dt>
+                    <dd>{useCase.registration.type}</dd>
+                    <dt>Registration file</dt>
+                    <dd><code>{useCase.registrationPath}</code></dd>
+                  </dl>
+                  {useCase.registration.parameters && Object.keys(useCase.registration.parameters).length > 0 && (
+                    <>
+                      <h4>Parameters</h4>
+                      <dl className="details-list">
+                        {Object.entries(useCase.registration.parameters).map(([key, value]) => (
+                          <React.Fragment key={key}>
+                            <dt>{key}</dt>
+                            <dd>{String(value)}</dd>
+                          </React.Fragment>
+                        ))}
+                      </dl>
+                    </>
+                  )}
+                  <h4>Template Instances</h4>
+                  <table className="details-table">
+                    <thead>
+                      <tr>
+                        <th>ID</th>
+                        <th>Type</th>
+                        <th>Input Parameters</th>
+                        <th>Default Parameters</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {useCase.registration.templates.map((inst: any, idx: number) => (
+                        <tr key={idx}>
+                          <td><code>{inst.id}</code></td>
+                          <td>{inst.type}</td>
+                          <td>
+                            {inst.inputParameters?.length ? (
+                              <ul className="compact-list">
+                                {inst.inputParameters.map((p: any, pidx: number) => (
+                                  <li key={pidx}><code>{p.name}</code>: {String(p.value)}</li>
+                                ))}
+                              </ul>
+                            ) : (
+                              <span className="muted">—</span>
+                            )}
+                          </td>
+                          <td>
+                            {inst.defaultParameters?.length ? (
+                              <ul className="compact-list">
+                                {inst.defaultParameters.map((p: any, pidx: number) => (
+                                  <li key={pidx}><code>{p.name}</code>: {String(p.value)}</li>
+                                ))}
+                              </ul>
+                            ) : (
+                              <span className="muted">—</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
                 <div className="stage-section">
                   <h3>Stages</h3>
                   <OverflowTable>
