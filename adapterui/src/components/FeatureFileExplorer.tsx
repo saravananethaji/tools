@@ -186,9 +186,10 @@ export const FeatureFileExplorer: React.FC<FeatureFileExplorerProps> = ({ onOpen
     setFileSize(0);
     setError(null);
     setActiveTab('scenarios');
-    setTemplateFolderSelected(false);
-    setAllFolderFiles([]);
-    setDiscoveredFeatures([]);
+    // Preserve folder selections so user doesn't need to re-select:
+    // - allFolderFiles (combined pool from feature + base test data folders)
+    // - templateFolderSelected flag
+    // - discoveredFeatures (feature list stays painted)
     setDiscoveryError(null);
   };
 
@@ -755,9 +756,16 @@ export const FeatureFileExplorer: React.FC<FeatureFileExplorerProps> = ({ onOpen
                 <>
                   <button
                     className="ffe-btn ffe-btn-secondary"
-                    onClick={() => setMode('discovery')}
+                    onClick={goBackToDiscovery}
                   >
                     🔍 Feature Discovery
+                  </button>
+                  <button
+                    className="ffe-btn ffe-btn-primary"
+                    onClick={goBackToDiscovery}
+                    title="Return to features list — folder selections are preserved"
+                  >
+                    ← Back to Features List
                   </button>
                   <button
                     className="ffe-btn ffe-btn-accent"
