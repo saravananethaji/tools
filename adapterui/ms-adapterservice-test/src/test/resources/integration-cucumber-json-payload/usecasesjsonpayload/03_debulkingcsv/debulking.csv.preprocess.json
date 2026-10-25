@@ -1,0 +1,15 @@
+{
+  "templateId": "debulking_csv_preprocess",
+  "templateType": "CSV_PREPROCESS",
+  "payload": {
+    "inputFile": "debulking.csv",
+    "encoding": "UTF-8",
+    "delimiter": ",",
+    "skipHeader": true,
+    "columns": ["id", "name", "value", "timestamp"]
+  },
+  "validation": {
+    "requiredFields": ["id", "name"],
+    "maxRows": 10000
+  }
+}

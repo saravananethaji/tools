@@ -79,4 +79,40 @@ describe('featureAdapterBridge', () => {
     expect(reviews[0].decoded.routes.length).toBeGreaterThan(0);
     expect(findings.length).toBeGreaterThan(0);
   });
+
+  it('matches payload paths with 5 grandparent levels (user scenario: feature in UTP, payload in src/test/resources)', () => {
+    // User's actual scenario:
+    // Feature file: .../ms-adapterservice-test/cucumber-test-scripts/integration-cucumber-test-scripts/UTP/01_adapter_apitoapi.feature
+    // Payload path referenced in feature: src/test/resources/integration-cucumber-json-payload/usecasesjsonpayload/03_debulkingcsv/debulking.csv.preprocess.json
+    // When user selects UTP/ as feature folder and src/test/resources/ as template folder,
+    // the browser provides webkitRelativePath for payload as:
+    //   integration-cucumber-json-payload/usecasesjsonpayload/03_debulkingcsv/debulking.csv.preprocess.json
+    const targetPath = 'src/test/resources/integration-cucumber-json-payload/usecasesjsonpayload/03_debulkingcsv/debulking.csv.preprocess.json';
+    const candidateRelPath = 'integration-cucumber-json-payload/usecasesjsonpayload/03_debulkingcsv/debulking.csv.preprocess.json';
+    const candidateName = 'debulking.csv.preprocess.json';
+
+    // Exact match variant
+    expect(matchesPath(targetPath, candidateRelPath, candidateName)).toBe(true);
+
+    // All 5 grandparent variants should match via endsWith
+    for (let i = 1; i <= 5; i++) {
+      const variant = '../'.repeat(i) + targetPath;
+      expect(matchesPath(variant, candidateRelPath, candidateName), `level ${i}`).toBe(true);
+    }
+  });
+
+  it('matches filename-only when grandparent path variants are used', () => {
+    const targetPath = 'src/test/resources/integration-cucumber-json-payload/usecasesjsonpayload/03_debulkingcsv/debulking.csv.preprocess.json';
+    // When browser only provides filename (no relative path), filename-only match should work
+    expect(matchesPath(targetPath, 'debulking.csv.preprocess.json', 'debulking.csv.preprocess.json')).toBe(true);
+    // With grandparent prefix
+    expect(matchesPath('../../../../../' + targetPath, 'debulking.csv.preprocess.json', 'debulking.csv.preprocess.json')).toBe(true);
+  });
+
+  it('does not match unrelated payload files even with grandparent variants', () => {
+    const targetPath = 'src/test/resources/integration-cucumber-json-payload/usecasesjsonpayload/03_debulkingcsv/debulking.csv.preprocess.json';
+    const unrelatedCandidate = 'some/other/path/unrelated.json';
+    expect(matchesPath(targetPath, unrelatedCandidate, 'unrelated.json')).toBe(false);
+    expect(matchesPath('../../../../../' + targetPath, unrelatedCandidate, 'unrelated.json')).toBe(false);
+  });
 });

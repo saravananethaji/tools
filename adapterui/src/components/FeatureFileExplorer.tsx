@@ -79,6 +79,7 @@ export const FeatureFileExplorer: React.FC<FeatureFileExplorerProps> = ({ onOpen
   const singleFileInputRef = useRef<HTMLInputElement>(null);
   // Accumulated files from all folder selections (feature + template folders)
   const [allFolderFiles, setAllFolderFiles] = useState<File[]>([]);
+  const [templateFolderSelected, setTemplateFolderSelected] = useState<boolean>(false);
 
   const jumpToFlow = (flowId: string) => {
     setActiveTab('adapters');
@@ -155,7 +156,7 @@ export const FeatureFileExplorer: React.FC<FeatureFileExplorerProps> = ({ onOpen
     return scanDir(folderHandle).then(() => features);
   };
 
-  const selectFeatureForExploration = (feat: typeof discoveredFeatures[0]) => {
+  const selectFeatureForExploration = async (feat: typeof discoveredFeatures[0]) => {
     setSelectedFeature(feat);
     setMode('single');
     setFileName(feat.fileName);
@@ -163,11 +164,17 @@ export const FeatureFileExplorer: React.FC<FeatureFileExplorerProps> = ({ onOpen
     setRawText(feat.rawText);
     const parsed = parseFeatureText(feat.rawText);
     setAnalysis(parsed);
-    autoResolveKnownFiles(parsed);
     setError(null);
     setActiveTab('scenarios');
     setExpandedScenarios({});
     setExpandedPreconditions(true);
+
+    // Auto-resolve payloads against the combined folder file pool (feature + template folders)
+    if (allFolderFiles.length > 0) {
+      await matchPayloadsAgainstFiles(parsed.artifacts.payloadFiles, allFolderFiles, feat.fileName);
+    } else {
+      autoResolveKnownFiles(parsed);
+    }
   };
 
   const goBackToDiscovery = () => {
@@ -179,24 +186,41 @@ export const FeatureFileExplorer: React.FC<FeatureFileExplorerProps> = ({ onOpen
     setFileSize(0);
     setError(null);
     setActiveTab('scenarios');
+    setTemplateFolderSelected(false);
+    setAllFolderFiles([]);
+    setDiscoveredFeatures([]);
+    setDiscoveryError(null);
   };
 
   const handleParentFolderSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
-    
+
     setDiscoveryError('Scanning folder...');
     setDiscoveredFeatures([]);
-    
+    setTemplateFolderSelected(false); // reset template folder when new feature folder selected
+
+    // Store feature folder files in the shared pool (dedup by path+name)
+    const featureFiles = Array.from(files);
+    setAllFolderFiles(prev => {
+      const merged = [...prev, ...featureFiles];
+      const seen = new Set<string>();
+      return merged.filter(f => {
+        const key = (f.webkitRelativePath || f.name) + '|' + f.name;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    });
+
     try {
-      const filesList = Array.from(files);
       const discovered: typeof discoveredFeatures = [];
-      
-      for (const f of filesList) {
+
+      for (const f of featureFiles) {
         if (f.name.endsWith('.feature')) {
           const relPath = f.webkitRelativePath || f.name;
           try {
-            const text = await f.text();  // Actually read the file content
+            const text = await f.text();
             const parsed = parseFeatureText(text);
             discovered.push({
               name: parsed.feature.name || f.name.replace('.feature', ''),
@@ -212,7 +236,7 @@ export const FeatureFileExplorer: React.FC<FeatureFileExplorerProps> = ({ onOpen
           }
         }
       }
-      
+
       setDiscoveredFeatures(discovered);
       if (discovered.length === 0) {
         setDiscoveryError('No .feature files found in the selected folder.');
@@ -222,8 +246,7 @@ export const FeatureFileExplorer: React.FC<FeatureFileExplorerProps> = ({ onOpen
     } catch (err) {
       setDiscoveryError(`Failed to scan folder: ${err instanceof Error ? err.message : 'Unknown error'}`);
     }
-    
-    // Reset so same folder can be re-selected
+
     if (e.target) e.target.value = '';
   };
 
@@ -435,6 +458,7 @@ export const FeatureFileExplorer: React.FC<FeatureFileExplorerProps> = ({ onOpen
         return true;
       });
     });
+    setTemplateFolderSelected(true);
 
     try {
       const fileList = Array.from(allFolderFiles).concat(newFiles);
@@ -670,7 +694,9 @@ export const FeatureFileExplorer: React.FC<FeatureFileExplorerProps> = ({ onOpen
         discoveredFeatures={discoveredFeatures}
         discoveryError={discoveryError}
         selectedFeature={selectedFeature}
+        templateFolderSelected={templateFolderSelected}
         onParentFolderSelect={handleParentFolderSelect}
+        onTemplateFolderSelect={handleTemplateFolderSelect}
         onSelectFeature={selectFeatureForExploration}
         onBackToDiscovery={goBackToDiscovery}
       />
@@ -1210,12 +1236,12 @@ export const FeatureFileExplorer: React.FC<FeatureFileExplorerProps> = ({ onOpen
                     className="ffe-btn ffe-btn-secondary"
                     onClick={() => templateFolderInputRef.current?.click()}
                     disabled={folderResolving}
-                    title="Select additional folder(s) containing payload/template JSON files"
+                    title="Select the base folder containing your test data files (payloads, adapter configs, events). All subfolders are scanned recursively."
                   >
-                    📁 {folderResolving ? 'Resolving…' : 'Select Template Folder(s)'}
+                    📁 {folderResolving ? 'Resolving…' : 'Select Base Test Data Folder'}
                   </button>
                   <span style={{ fontSize: '0.84rem', color: '#94a3b8' }}>
-                    Select feature folder first, then add template/payload folder(s) to auto-resolve
+                    Select feature folder first, then add base test data folder(s) to auto-resolve payloads
                   </span>
                 </div>
 

@@ -1,0 +1,39 @@
+{
+  "type":"EVENTTOAPI",
+  "name":"SEPA PAYMENT EVENT TO REST API CALL",
+  "status":"START",
+  "templates":[
+    {
+      "id":"direct:eventtoapi.json.process",
+      "type":"PROCESS",
+      "inputParameters":[
+        {
+          "name":"process.routeId",
+          "value":"direct:eventtoapi.json.process"
+        },
+        {
+          "name":"httpRequestType",
+          "value":"POST"
+        },
+        {
+          "name": "https.config",
+          "value": "false"
+        },
+        {
+          "name":"httpEndPoint",
+          "value":"http://mockip:3000/irf-provider-container/api/v1.0.0/order/paymentOrders/sepaInstantPayment"
+        },
+        {
+          "name":"data.transform.spec",
+          "value":"Ww0KICB7DQogICAgIm9wZXJhdGlvbiI6ICJzaGlmdCIsDQogICAgInNwZWMiOiB7DQogICAgICAiZGViaXRBY2NvdW50SUJBTiI6ICJib2R5LmRlYml0QWNjb3VudElCQU4iLA0KICAgICAgInBheW1lbnRDdXJyZW5jeUlkIjogImJvZHkucGF5bWVudEN1cnJlbmN5SWQiLA0KICAgICAgImFtb3VudCI6ICJib2R5LmFtb3VudCIsDQogICAgICAiYmVuZWZpY2lhcnlJQkFOIjogImJvZHkuYmVuZWZpY2lhcnlJQkFOIg0KICAgIH0NCiAgfQ0KXQ0K"
+        }
+      ],
+      "defaultParameters":[
+
+      ]
+    }
+  ],
+  "parameters":{
+
+  }
+}
