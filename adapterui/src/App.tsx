@@ -135,7 +135,231 @@ function TemplateRefPanel({ review }: { review: ReviewModel }) {
       ))}</tbody></table></OverflowTable>
   </section>;
 }
-function AdapterView({ review }: { review: ReviewModel }) { const transformSummary = review.transformEngine ? `${review.transformEngine} transformation` : 'Transformation not detected'; const entry = runtimeEntryParameter(review); return <div className="grid"><section className="panel hero"><p className="eyebrow">ADAPTER CONFIGURATION VIEW · RUNTIME ENTRY POINT</p><h2><code>{entry?.provisionalValue || 'Not configured'}</code></h2><p>This is the route the adapter invokes when the template starts.</p><p className="muted">Configured by <code>{entry?.name || 'No route-ID parameter found'}</code> · status <strong>{review.registration.status}</strong></p><p>Adapter: {review.registration.name}<br/>Matched template: <code>{review.instance.id}</code> / {review.instance.type}</p></section><TemplateRefPanel review={review}/><section className="panel wide"><h2>Effective configuration</h2><p className="muted">Sources are shown separately; the final effective value is <strong>Not verified</strong> because runtime parameter precedence is not confirmed.</p><OverflowTable><table><thead><tr><th>Meaning / parameter</th><th>Declaration</th><th>Template default</th><th>Registration default</th><th>Supplied</th><th>Effective value</th><th>XML use</th><th>State</th></tr></thead><tbody>{review.effectiveParameters.map((parameter) => <tr key={parameter.name}><td><strong>{parameter.declaration?.helpText || parameter.name}</strong><code>{parameter.name}</code></td><td>{parameter.declaration ? 'Declared' : 'Missing declaration'}</td><td>{parameter.templateDefault || '—'}</td><td>{parameter.registrationDefault || '—'}</td><td>{parameter.suppliedValue && parameter.name.includes('transform') ? transformSummary : parameter.suppliedValue || '—'}</td><td><Badge severity="Not verified"/></td><td>{parameter.xmlReferences.length ? parameter.xmlReferences.map((ref) => ref.location).join(', ') : 'Not found'}</td><td>{parameter.state}</td></tr>)}</tbody></table></OverflowTable></section><section className="panel"><h2>Transformation</h2><p><Badge severity={review.transformSpec ? 'Valid' : 'Not verified'}/> {transformSummary}</p><pre className="code small">{review.transformSpec ? typeof review.transformSpec === 'string' ? safeText(review.transformSpec) : JSON.stringify(review.transformSpec, null, 2) : 'No decoded transformation is available.'}</pre></section><section className="panel"><h2>Target API</h2><dl>{['httpRequestType', 'https.config', 'httpEndPoint'].map((name) => { const parameter = review.effectiveParameters.find((item) => item.name === name); return <React.Fragment key={name}><dt>{name}</dt><dd>{parameter?.provisionalValue || 'Not supplied'}</dd></React.Fragment>; })}</dl></section><section className="panel wide"><h2>Unmanaged fields</h2><p>Registration: {Object.keys(review.registration.unknownFields).join(', ') || 'none'} · Template: {Object.keys(review.template.unknownFields).join(', ') || 'none'}</p></section></div>; }
+function AdapterView({ review }: { review: ReviewModel }) {
+  const transformSummary = review.transformEngine ? `${review.transformEngine} transformation` : 'Transformation not detected';
+  const entry = runtimeEntryParameter(review);
+  const counts = useMemo(() => {
+    const c: Record<string, number> = { Valid: 0, Warning: 0, Invalid: 0, 'Not verified': 0 };
+    review.effectiveParameters.forEach((p) => { c[p.state] = (c[p.state] ?? 0) + 1; });
+    return c;
+  }, [review.effectiveParameters]);
+  const stateBadge = (state: string) => {
+    const s = state.toLowerCase();
+    if (s === 'missing' || s === 'undeclared supplied') return <span className="param-state invalid">✕ Invalid</span>;
+    if (s === 'template default') return <span className="param-state warning">⚠ Warning</span>;
+    if (s === 'supplied' || s === 'registration default') return <span className="param-state valid">✓ Valid</span>;
+    return <span className="param-state not-verified">? Not verified</span>;
+  };
+
+  const invalidParams = review.effectiveParameters.filter((p) => p.state === 'Missing' || p.state === 'Undeclared supplied');
+  const warningParams = review.effectiveParameters.filter((p) => p.state === 'Template default');
+  const requiredCount = review.effectiveParameters.filter((p) => p.declaration?.isMandatory === 'true' || p.declaration?.isMandatory === true).length;
+  const attentionItems = [
+    ...invalidParams.map((p) => ({ param: p, type: 'invalid' as const })),
+    ...warningParams.map((p) => ({ param: p, type: 'warning' as const })),
+  ];
+
+  const rowStateClass = (state: string) => {
+    const s = state.toLowerCase();
+    if (s === 'missing' || s === 'undeclared supplied') return 'config-row invalid';
+    if (s === 'template default') return 'config-row warning';
+    if (s === 'supplied' || s === 'registration default') return 'config-row ok';
+    return 'config-row not-verified';
+  };
+
+  const sourceConfidence = (parameter: any) => {
+    if (parameter.suppliedValue) return <span className="source-confidence high">Supplied</span>;
+    if (parameter.registrationDefault) return <span className="source-confidence medium">Registration default</span>;
+    if (parameter.templateDefault) return <span className="source-confidence low">Template default</span>;
+    return <span className="source-confidence low">Missing</span>;
+  };
+
+  return (
+    <div className="grid">
+      {/* Hero Header */}
+      <section className="panel hero">
+        <p className="eyebrow">ADAPTER CONFIGURATION VIEW · RUNTIME ENTRY POINT</p>
+        <h2><code>{entry?.provisionalValue || 'Not configured'}</code></h2>
+        <p>This is the route the adapter invokes when the template starts.</p>
+        <p className="muted">Configured by <code>{entry?.name || 'No route-ID parameter found'}</code> · status <strong>{review.registration.status}</strong></p>
+        <div className="metric-grid">
+          <div className="metric-card">
+            <p className="metric-label">Adapter</p>
+            <p className="metric-value">{review.registration.name}</p>
+            <p className="metric-sub">{review.registration.type}</p>
+          </div>
+          <div className="metric-card">
+            <p className="metric-label">Matched Template</p>
+            <p className="metric-value">{review.instance.id}</p>
+            <p className="metric-sub">{review.instance.type}</p>
+          </div>
+          <div className={`metric-card ${invalidParams.length ? 'alert' : ''}`}>
+            <p className="metric-label">Parameters</p>
+            <p className="metric-value">{review.effectiveParameters.length}</p>
+            <p className="metric-sub">{requiredCount} required</p>
+          </div>
+          <div className={`metric-card ${counts.Invalid > 0 ? 'alert' : counts.Warning > 0 ? 'highlight' : ''}`}>
+            <p className="metric-label">Config Health</p>
+            <p className="metric-value">{counts.Invalid > 0 ? 'Errors' : counts.Warning > 0 ? 'Warnings' : 'Healthy'}</p>
+            <p className="metric-sub">{counts.Invalid} invalid · {counts.Warning} warnings</p>
+          </div>
+          <div className="metric-card">
+            <p className="metric-label">Transform</p>
+            <p className="metric-value">{review.transformEngine || '—'}</p>
+            <p className="metric-sub">{review.transformSpec ? 'decoded' : 'not available'}</p>
+          </div>
+        </div>
+      </section>
+
+      {/* Snapshot Grid: Registration + Template */}
+      <div className="snapshot-grid">
+        <div className="snapshot-card">
+          <h3>Registration Details</h3>
+          <div className="snapshot-row">
+            <span className="snapshot-label">Name</span>
+            <span className="snapshot-value">{review.registration.name}</span>
+          </div>
+          <div className="snapshot-row">
+            <span className="snapshot-label">Type</span>
+            <span className="snapshot-value">{review.registration.type}</span>
+          </div>
+          <div className="snapshot-row">
+            <span className="snapshot-label">Status</span>
+            <span className="snapshot-value"><strong>{review.registration.status}</strong></span>
+          </div>
+          <div className="snapshot-row">
+            <span className="snapshot-label">File</span>
+            <span className="snapshot-value"><code>{review.registrationSource.name}</code></span>
+          </div>
+        </div>
+        <div className="snapshot-card">
+          <h3>Template Details</h3>
+          <div className="snapshot-row">
+            <span className="snapshot-label">Name</span>
+            <span className="snapshot-value">{review.template.name}</span>
+          </div>
+          <div className="snapshot-row">
+            <span className="snapshot-label">ID</span>
+            <span className="snapshot-value"><code>{review.template.id}</code></span>
+          </div>
+          <div className="snapshot-row">
+            <span className="snapshot-label">Type</span>
+            <span className="snapshot-value">{review.template.type}</span>
+          </div>
+          <div className="snapshot-row">
+            <span className="snapshot-label">File</span>
+            <span className="snapshot-value"><code>{review.templateSource.name}</code></span>
+          </div>
+        </div>
+      </div>
+
+      {/* Critical Parameters Callout */}
+      {(attentionItems.length > 0) && (
+        <section className={`panel critical-callout ${invalidParams.length > 0 ? '' : 'warning'}`}>
+          <h3>
+            {invalidParams.length > 0 ? '⚠' : 'ℹ'} Attention Required
+          </h3>
+          {attentionItems.map((item, idx) => (
+            <div key={idx} className={`critical-item ${item.type}`}>
+              <span className="critical-param">{item.param.declaration?.helpText || item.param.name}<code>{item.param.name}</code></span>
+              <span className={`critical-reason ${item.type}`}>{item.type === 'invalid' ? 'Invalid or missing value' : 'Declared but may need review'}</span>
+            </div>
+          ))}
+        </section>
+      )}
+
+      {/* Effective Configuration Table */}
+      <section className="panel wide review-section">
+        <h2>Effective Configuration</h2>
+        <p className="muted">Sources are shown separately; the final effective value is <strong>Not verified</strong> because runtime parameter precedence is not confirmed.</p>
+        <OverflowTable>
+          <table>
+            <thead>
+              <tr>
+                <th>Meaning / Parameter</th>
+                <th>Declaration</th>
+                <th>Template Default</th>
+                <th>Registration Default</th>
+                <th>Supplied Value</th>
+                <th>Effective Value</th>
+                <th>Source</th>
+                <th>XML Use</th>
+                <th>State</th>
+              </tr>
+            </thead>
+            <tbody>
+              {review.effectiveParameters.map((parameter) => {
+                const isRequired = parameter.declaration?.isMandatory === 'true' || parameter.declaration?.isMandatory === true;
+                const isTransform = parameter.name.includes('transform');
+                return (
+                  <tr key={parameter.name} className={rowStateClass(parameter.state)}>
+                    <td>
+                      <strong>{parameter.declaration?.helpText || parameter.name}</strong>
+                      <code>{parameter.name}</code>{isRequired && <span className="required-marker">required</span>}
+                    </td>
+                    <td>{parameter.declaration ? 'Declared' : 'Missing declaration'}</td>
+                    <td>{parameter.templateDefault || '—'}</td>
+                    <td>{parameter.registrationDefault || '—'}</td>
+                    <td>{isTransform ? transformSummary : parameter.suppliedValue || '—'}</td>
+                    <td>{sourceConfidence(parameter)}</td>
+                    <td>{parameter.xmlReferences.length ? parameter.xmlReferences.map((ref) => ref.location).join(', ') : 'Not found'}</td>
+                    <td>{stateBadge(parameter.state)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </OverflowTable>
+      </section>
+
+      {/* Template Reference Resolution */}
+      <TemplateRefPanel review={review} />
+
+      {/* Transformation */}
+      <section className="panel wide review-section">
+        <h2>Transformation</h2>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+          <Badge severity={review.transformSpec ? 'Valid' : 'Not verified'} />
+          <span className="muted">{transformSummary}</span>
+        </div>
+        <pre className="code small">{review.transformSpec ? typeof review.transformSpec === 'string' ? safeText(review.transformSpec) : JSON.stringify(review.transformSpec, null, 2) : 'No decoded transformation is available.'}</pre>
+      </section>
+
+      {/* Target API */}
+      <section className="panel review-section">
+        <h2>Target API Configuration</h2>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
+          {['httpRequestType', 'https.config', 'httpEndPoint'].map((name) => {
+            const parameter = review.effectiveParameters.find((item) => item.name === name);
+            const value = parameter?.provisionalValue || 'Not supplied';
+            const hasValue = parameter && parameter.provisionalValue;
+            return (
+              <div key={name} className="snapshot-card" style={{ padding: '12px' }}>
+                <h3 style={{ margin: '0 0 6px 0', fontSize: '0.7rem' }}>{name}</h3>
+                <div className="snapshot-value" style={{ fontSize: '0.9rem', color: hasValue ? '#7adcb4' : '#9ca8bb' }}>{value}</div>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
+      {/* Unmanaged Fields */}
+      <section className="panel review-section">
+        <h2>Unmanaged Fields</h2>
+        <div style={{ display: 'flex', gap: 20 }}>
+          <div style={{ flex: 1 }}>
+            <p className="muted" style={{ margin: '0 0 4px 0' }}>Registration</p>
+            <code>{Object.keys(review.registration.unknownFields).join(', ') || 'none'}</code>
+          </div>
+          <div style={{ flex: 1 }}>
+            <p className="muted" style={{ margin: '0 0 4px 0' }}>Template</p>
+            <code>{Object.keys(review.template.unknownFields).join(', ') || 'none'}</code>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
 function RelationshipView({ review }: { review: ReviewModel }) {
   const transformSummary = review.transformEngine ? `${review.transformEngine} transformation` : 'Transformation not detected';
   const relationshipState = (parameter: { xmlReferences: { length: number }; suppliedValue?: string; registrationDefault?: string; templateDefault?: string; declaration?: { helpText?: string } }): string => {

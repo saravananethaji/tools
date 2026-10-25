@@ -217,3 +217,263 @@
   color: #f1f5f9;
   border-color: #64748b;
 }
+
+/* ============ Adapter Review - Enhanced Dashboard Styles ============ */
+
+/* Metric grid - key stat cards at top of adapter review */
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin: 18px 0 26px;
+}
+
+.metric-card {
+  background: #172230;
+  border: 1px solid #3a536f;
+  border-radius: 10px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.metric-card.highlight {
+  border-color: #70d1bd;
+  background: #163038;
+}
+
+.metric-card.alert {
+  border-color: #f48771;
+  background: #2a1d1d;
+}
+
+.metric-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #9ca8bb;
+  margin: 0;
+}
+
+.metric-value {
+  font-size: 1.3rem;
+  font-weight: 700;
+  color: #e9edf5;
+  margin: 2px 0 0;
+  word-break: break-all;
+}
+
+.metric-sub {
+  font-size: 0.78rem;
+  color: #708498;
+  margin: 0;
+}
+
+/* Snapshot cards - registration and template side-by-side */
+.snapshot-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 14px;
+  margin-bottom: 26px;
+}
+
+.snapshot-card {
+  background: #172230;
+  border: 1px solid #3a536f;
+  border-radius: 10px;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.snapshot-card h3 {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: #8f9ab0;
+  margin: 0 0 6px 0;
+}
+
+.snapshot-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid #23344a;
+}
+
+.snapshot-row:last-child {
+  border-bottom: none;
+}
+
+.snapshot-label {
+  font-size: 0.82rem;
+  color: #9ca8bb;
+}
+
+.snapshot-value {
+  font-size: 0.86rem;
+  color: #e9edf5;
+  word-break: break-all;
+}
+
+.snapshot-value code {
+  font-size: 0.8rem;
+  color: #7adcb4;
+}
+
+/* Critical parameters callout */
+.critical-callout {
+  background: #2a1d1d;
+  border: 1px solid #f48771;
+  border-radius: 10px;
+  padding: 16px;
+  margin-bottom: 26px;
+}
+
+.critical-callout.warning {
+  background: #2a241d;
+  border-color: #e3b341;
+}
+
+.critical-callout h3 {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #f48771;
+  margin: 0 0 10px 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.critical-callout.warning h3 {
+  color: #e3b341;
+}
+
+.critical-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid #3a2e2e;
+}
+
+.critical-item:last-child {
+  border-bottom: none;
+}
+
+.critical-item.warning {
+  border-color: #3a342e;
+}
+
+.critical-param {
+  font-size: 0.82rem;
+  color: #e9edf5;
+}
+
+.critical-param code {
+  color: #f48771;
+}
+
+.critical-param.warning code {
+  color: #e3b341;
+}
+
+.critical-reason {
+  font-size: 0.76rem;
+  color: #b08d8d;
+}
+
+.critical-reason.warning {
+  color: #c9a84d;
+}
+
+/* Parameter state badges in config table */
+.param-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 0.74rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.param-state.valid {
+  background: #163a26;
+  color: #7adcb4;
+  border: 1px solid #2c5548;
+}
+
+.param-state.warning {
+  background: #2a241d;
+  color: #e3b341;
+  border: 1px solid #5c4a1e;
+}
+
+.param-state.invalid {
+  background: #2a1d1d;
+  color: #f48771;
+  border: 1px solid #6a2e2e;
+}
+
+.param-state.not-verified {
+  background: #1e2b3e;
+  color: #9ca8bb;
+  border: 1px solid #3a536f;
+}
+
+/* Confidence indicator for effective value source */
+.source-confidence {
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.source-confidence.high { background: #163a26; color: #7adcb4; border: 1px solid #2c5548; }
+.source-confidence.medium { background: #2a241d; color: #e3b341; border: 1px solid #5c4a1e; }
+.source-confidence.low { background: #2a1d1d; color: #f48771; border: 1px solid #6a2e2e; }
+
+/* Required parameter marker */
+.required-marker {
+  color: #f48771;
+  font-weight: 700;
+  font-size: 0.7rem;
+  margin-left: 4px;
+}
+
+/* Template reference result states */
+.ref-state.ok { color: #7adcb4; font-weight: 600; }
+.ref-state.broken { color: #f48771; font-weight: 600; }
+
+/* Section spacing for review tabs */
+.review-section {
+  margin-bottom: 26px;
+}
+
+.review-section h2 {
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #8f9ab0;
+  margin: 0 0 12px 0;
+  border-bottom: 1px solid #2c5548;
+  padding-bottom: 8px;
+}
+
+/* Table row state highlighting */
+.config-row.ok { border-left: 3px solid #2c5548; }
+.config-row.warning { border-left: 3px solid #5c4a1e; }
+.config-row.invalid { border-left: 3px solid #6a2e2e; }
+.config-row.not-verified { border-left: 3px solid #3a536f; }
+
